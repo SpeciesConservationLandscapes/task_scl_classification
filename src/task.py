@@ -6,15 +6,9 @@ import subprocess
 import numpy as np
 import pandas as pd
 import pyodbc
-
-# import time
 import uuid
-
-# import json
-# from datetime import datetime, timezone
 from typing import Optional, Union
 
-# from geomet import wkt
 from google.cloud.storage import Client
 from google.cloud.exceptions import NotFound
 from pathlib import Path
@@ -35,14 +29,19 @@ class SCLClassification(SCLTask):
         "obs_adhoc": {"maxage": 50},
         "obs_ss": {"maxage": 50},
         "obs_ct": {"maxage": 50},
-        # "zones": {
-        #     "ee_type": SCLTask.FEATURECOLLECTION,
-        #     "ee_path": "scl_zones",
-        #     "static": True,
-        # },
-        "scl": {
-            "ee_type": SCLTask.FEATURECOLLECTION,
-            "ee_path": "scl_polys",
+        "historic_range": {
+            "ee_type": SCLTask.IMAGE,
+            "ee_path": "projects/SCL/v1/Panthera_tigris/historical_range_img_200914",
+            "static": True,
+        },
+        "extirpated_range": {
+            "ee_type": SCLTask.IMAGE,
+            "ee_path": "projects/SCL/v1/Panthera_tigris/source/Inputs_2006/extirp_fin",
+            "static": True,
+        },
+        "potential_habitat": {
+            "ee_type": SCLTask.IMAGECOLLECTION,
+            "ee_path": "scenario_habitat",
             "maxage": 1 / 365,
         },
     }
@@ -52,6 +51,9 @@ class SCLClassification(SCLTask):
         "presence_score": 1,
         "landscape_survey_effort": 1,
     }
+
+    def scenario_habitat(self):
+        return f"{self.ee_rootdir}/pothab/potential_habitat"
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -79,12 +81,15 @@ class SCLClassification(SCLTask):
 
         self._df_adhoc = self._df_ct = self._df_ss = None
         self._fc_observations = None
-        # self._zone_ids = []
-        # self.zone = None
         self.fc_csvs = []
-        # self.zones = ee.FeatureCollection(self.inputs["zones"]["ee_path"])
-        self.scl, _ = self.get_most_recent_featurecollection(
-            self.inputs["scl"]["ee_path"]
+        self.potential_habitat, _ = self.get_most_recent_image(
+            self.inputs["potential_habitat"]["ee_path"]
+        )
+        self.historic_range = ee.Image(self.inputs["historic_range"]["ee_path"]).unmask(
+            0
+        )
+        self.extirpated_range = ee.Image(self.inputs["extirpated_range"]["ee_path"]).eq(
+            0
         )
         self.intersects = ee.Filter.intersects(".geo", None, ".geo")
 
@@ -120,13 +125,6 @@ class SCLClassification(SCLTask):
                 ee.Filter.gte("effort", self.thresholds["landscape_survey_effort"]),
             ),
         }
-
-    # TODO: move to task_base
-    # def scl_zones(self):
-    #     return f"projects/{self.ee_project}/{self.species}/zones"
-
-    def scl_polys(self):
-        return f"{self.ee_rootdir}/pothab/scl_polys"
 
     def poly_export(self, polys, scl_name):
         size_test = polys.size().gt(0).getInfo()
@@ -259,14 +257,6 @@ class SCLClassification(SCLTask):
         self._remove_from_cloudstorage(f"{blob}.csv")
         self.fc_csvs.append((f"{tempfile}.csv", table_asset_id))
         return ee.FeatureCollection(table_asset_id)
-
-    # @property
-    # def zone_ids(self):
-    #     if len(self._zone_ids) < 1:
-    #         self._zone_ids = (
-    #             self.zones.aggregate_histogram(self.ZONES_LABEL).keys().getInfo()
-    #         )
-    #     return self._zone_ids
 
     @property
     def df_adhoc(self):
@@ -403,11 +393,31 @@ class SCLClassification(SCLTask):
         return sclpoly.set("presence_score", score)
 
     def calc(self):
+        range_binary = (
+            ee.Image(0)
+            .where(self.historic_range.eq(1), ee.Image(2))
+            .where(self.extirpated_range.eq(1), ee.Image(1))
+        ).selfMask()
+
+        survey_effort = ee.Image.constant(1)
+
+        scl_polys = (
+            self.potential_habitat.addBands(
+                [self.potential_habitat, range_binary, survey_effort]
+            )
+            .rename(["scl_poly", "size", "range", "effort"])
+            .reduceToVectors(
+                reducer=ee.Reducer.max(),  # TODO: may need to consider a unique reducer for each band to delineate polygons
+                geometry=ee.Geometry.Polygon(self.extent),
+                scale=self.scale,
+                crs=self.crs,
+                maxPixels=self.ee_max_pixels,
+            )
+        )
+
         # TODO: Should the different dfs be treated differently?
         # TODO: evaluate score assigned by time-weighting function
-        # print(self.scl)
-
-        scl_scored = self.scl.map(self.presence_score)
+        scl_scored = scl_polys.map(self.presence_score)
         # TODO: Still need to account for effort
         scl_species = scl_scored.filter(self.scl_poly_filters["scl_species"])
         scl_survey = scl_scored.filter(self.scl_poly_filters["scl_survey"])
