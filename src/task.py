@@ -405,8 +405,6 @@ class SCLClassification(SCLTask):
     def calc(self):
         # TODO: Should the different dfs be treated differently?
         # TODO: evaluate score assigned by time-weighting function
-        # TODO: Do we need to filter for positive observations?
-        # print(self.fc_observations)
         # print(self.scl)
 
         scl_scored = self.scl.map(self.presence_score)
