@@ -39,9 +39,9 @@ class SCLClassification(SCLTask):
             "ee_path": "projects/SCL/v1/Panthera_tigris/source/Inputs_2006/extirp_fin",
             "static": True,
         },
-        "potential_habitat": {
-            "ee_type": SCLTask.IMAGECOLLECTION,
-            "ee_path": "scenario_habitat",
+        "scl": {
+            "ee_type": SCLTask.FEATURECOLLECTION,
+            "ee_path": "scl_polys",
             "maxage": 1 / 365,
         },
     }
@@ -82,8 +82,8 @@ class SCLClassification(SCLTask):
         self._df_adhoc = self._df_ct = self._df_ss = None
         self._fc_observations = None
         self.fc_csvs = []
-        self.potential_habitat, _ = self.get_most_recent_image(
-            self.inputs["potential_habitat"]["ee_path"]
+        self.scl, _ = self.get_most_recent_featurecollection(
+            self.inputs["scl"]["ee_path"]
         )
         self.historic_range = ee.Image(self.inputs["historic_range"]["ee_path"]).unmask(
             0
@@ -125,6 +125,9 @@ class SCLClassification(SCLTask):
                 ee.Filter.gte("effort", self.thresholds["landscape_survey_effort"]),
             ),
         }
+
+    def scl_polys(self):
+        return f"{self.ee_rootdir}/pothab/scl_polys"
 
     def poly_export(self, polys, scl_name):
         size_test = polys.size().gt(0).getInfo()
@@ -399,26 +402,19 @@ class SCLClassification(SCLTask):
             .where(self.extirpated_range.eq(1), ee.Image(1))
         ).selfMask()
 
-        survey_effort = ee.Image.constant(1)
-
-        scl_polys = (
-            self.potential_habitat.addBands(
-                [self.potential_habitat, range_binary, survey_effort]
-            )
-            .rename(["scl_poly", "size", "range", "effort"])
-            .reduceToVectors(
-                reducer=ee.Reducer.max(),  # TODO: may need to consider a unique reducer for each band to delineate polygons
-                geometry=ee.Geometry.Polygon(self.extent),
-                scale=self.scale,
-                crs=self.crs,
-                maxPixels=self.ee_max_pixels,
-            )
-        )
+        scl_polys = range_binary.reduceRegions({
+            collection: self.scl,
+            reducer: ee.Reducer.max(),
+            scale: scale,
+            crs: crs
+        })
 
         # TODO: Should the different dfs be treated differently?
         # TODO: evaluate score assigned by time-weighting function
+        # TODO: replace presence_score with probability and effort from Charles
+        # Plan: manually ingest results from Charles, join to self.scl, then apply filters with `probability`
+        # instead of doing .map(self.presence_score)
         scl_scored = scl_polys.map(self.presence_score)
-        # TODO: Still need to account for effort
         scl_species = scl_scored.filter(self.scl_poly_filters["scl_species"])
         scl_survey = scl_scored.filter(self.scl_poly_filters["scl_survey"])
         scl_restoration = scl_scored.filter(self.scl_poly_filters["scl_restoration"])
