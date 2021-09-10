@@ -42,6 +42,7 @@ class SCLClassification(SCLTask):
     MASTER_GRID_LABEL = "mastergrid"
     MASTER_CELL_LABEL = "mastergridcell"
     EE_ID_LABEL = "id"
+    EE_SYSTEM_INDEX = "system:index"
     SCLPOLY_ID = "poly_id"
     ZONIFY_DF_COLUMNS = [
         UNIQUE_ID_LABEL,
@@ -274,6 +275,8 @@ class SCLClassification(SCLTask):
 
     # add "mastergrid" and "mastergridcell" to df
     def zonify(self, df):
+        master_grid_df = pd.DataFrame(columns=self.ZONIFY_DF_COLUMNS)
+
         # df with point geom if we have one, polygon otherwise, or drop if neither
         obs_df = df[
             [self.POINT_LOC_LABEL, self.GRIDCELL_LOC_LABEL, self.UNIQUE_ID_LABEL]
@@ -285,15 +288,11 @@ class SCLClassification(SCLTask):
         obs_df["geom"].loc[obs_df["geom"].isna()] = obs_df[self.GRIDCELL_LOC_LABEL]
         obs_df = obs_df[["geom", self.UNIQUE_ID_LABEL]]
         obs_df.set_index(self.UNIQUE_ID_LABEL, inplace=True)
-        obs_features = self.df2fc(obs_df).filterBounds(self.geofilter)
 
-        return_obs_features = obs_features.map(self.attribute_obs)
-        master_grid_df = self.fc2df(return_obs_features, self.ZONIFY_DF_COLUMNS)
-        if master_grid_df.empty:
-            master_grid_df[self.UNIQUE_ID_LABEL] = pd.Series(dtype="object")
-            master_grid_df[self.MASTER_GRID_LABEL] = pd.Series(dtype="object")
-            master_grid_df[self.MASTER_CELL_LABEL] = pd.Series(dtype="object")
-            master_grid_df[self.SCLPOLY_ID] = pd.Series(dtype="object")
+        if not obs_df.empty:
+            obs_features = self.df2fc(obs_df).filterBounds(self.geofilter)
+            return_obs_features = obs_features.map(self.attribute_obs)
+            master_grid_df = self.fc2df(return_obs_features, self.ZONIFY_DF_COLUMNS)
 
         df = pd.merge(left=df, right=master_grid_df)
 
@@ -385,9 +384,12 @@ class SCLClassification(SCLTask):
                 self._df_adhoc = self._get_df(query)
                 print("zonify adhoc")
                 self._df_adhoc = self.zonify(self._df_adhoc)
+                self._df_adhoc = self._df_adhoc.drop(
+                    [self.POINT_LOC_LABEL, self.GRIDCELL_LOC_LABEL], axis=1
+                )
                 self._df_adhoc.set_index(self.MASTER_CELL_LABEL, inplace=True)
 
-            if self.use_cache and not self._df_adhoc.empty:
+            if self.use_cache:
                 self._df_adhoc.to_csv(_csvpath)
 
         return self._df_adhoc
@@ -433,7 +435,9 @@ class SCLClassification(SCLTask):
                     + df_ct_obs["SubAdultCount"]
                     + df_ct_obs["YoungCount"]
                 )
-                df_ct_obs[self.CT_DAYS_DETECTED_LABEL].fillna(0, inplace=True)
+                df_ct_obs[self.CT_DAYS_DETECTED_LABEL] = df_ct_obs[
+                    self.CT_DAYS_DETECTED_LABEL
+                ].astype(int)
 
                 # number of days with > 0 detections per camera
                 df_ct_obsdays = (
@@ -452,8 +456,19 @@ class SCLClassification(SCLTask):
                 self._df_ct.rename(
                     columns={"UniqueID_x": self.UNIQUE_ID_LABEL}, inplace=True
                 )
+                self._df_ct = self._df_ct[
+                    [
+                        self.UNIQUE_ID_LABEL,
+                        self.DATE_LABEL,
+                        self.MASTER_GRID_LABEL,
+                        self.MASTER_CELL_LABEL,
+                        self.SCLPOLY_ID,
+                        self.CT_DAYS_OPERATING_LABEL,
+                        self.CT_DAYS_DETECTED_LABEL,
+                    ]
+                ]
 
-            if self.use_cache and not self._df_ct.empty:
+            if self.use_cache:
                 self._df_ct.to_csv(_csvpath)
 
         return self._df_ct
@@ -481,9 +496,12 @@ class SCLClassification(SCLTask):
                 self._df_ss = self._get_df(query)
                 print("zonify sign survey")
                 self._df_ss = self.zonify(self._df_ss)
+                self._df_ss = self._df_ss.drop(
+                    [self.POINT_LOC_LABEL, self.GRIDCELL_LOC_LABEL], axis=1
+                )
                 self._df_ss.set_index(self.MASTER_CELL_LABEL, inplace=True)
 
-            if self.use_cache and not self._df_ss.empty:
+            if self.use_cache:
                 self._df_ss.to_csv(_csvpath)
 
         return self._df_ss
@@ -550,10 +568,8 @@ class SCLClassification(SCLTask):
             )
         )
 
-        matching_polys = ee.Join.simple().apply(
-            self.scl_polys, obs_feature, self.intersects
-        )
-        poly_true = matching_polys.first().get(self.EE_ID_LABEL)
+        matching_polys = self.scl_polys.filterBounds(centroid)
+        poly_true = ee.Number(matching_polys.first().get(self.EE_SYSTEM_INDEX))
         poly = ee.Algorithms.If(matching_polys.size().gte(1), poly_true, id_false)
 
         obs_feature = obs_feature.setMulti(
@@ -567,8 +583,8 @@ class SCLClassification(SCLTask):
         return obs_feature
 
     def calc(self):
-        # print(self.scl_polys.limit(5).getInfo())
-        _csvpath = "scl_polys.csv"
+        # Temporary: export dataframes needed for probability modeling
+        # Make sure cache csvs don't exist locally before running
         if self.use_cache:
             prob_columns = [
                 "system:index",
@@ -578,9 +594,11 @@ class SCLClassification(SCLTask):
             df_scl_polys = self.fc2df(self.scl_polys, columns=prob_columns)
             df_scl_polys.rename(columns={"system:index": self.SCLPOLY_ID}, inplace=True)
             df_scl_polys.set_index(self.SCLPOLY_ID, inplace=True)
-            df_scl_polys.to_csv(_csvpath)
-        # self.export_fc_ee(scl_polys, "scratch/scl_polys_attributed")
+            df_scl_polys.to_csv("scl_polys.csv")
+
         print(self.df_adhoc)
+        print(self.df_cameratrap)
+        print(self.df_signsurvey)
 
         # temporary code here to:
         # convert polys csv Charles sends to fc
