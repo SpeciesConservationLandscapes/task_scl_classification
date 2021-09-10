@@ -16,6 +16,10 @@ from pathlib import Path
 from task_base import SCLTask
 
 
+def feature_area(feat):
+    return feat.set("area", feat.area())
+
+
 class ConversionException(Exception):
     pass
 
@@ -511,19 +515,24 @@ class SCLClassification(SCLTask):
         return self.scl.map(self.attribute_scl)
 
     def attribute_scl(self, scl):
-        # TODO: take country/biome from intersected polygon with the largest area
         poly = scl.geometry()
 
-        matching_countries = ee.Join.simple().apply(
-            self.countries.filterBounds(poly), scl, self.intersects
+        matching_countries = (
+            ee.Join.simple()
+            .apply(self.countries.filterBounds(poly), scl, self.intersects)
+            .map(feature_area)
+            .sort("area", False)
         )
         country_true = matching_countries.first().get("COUNTRY_NA")
         country = ee.Algorithms.If(
             matching_countries.size().gte(1), country_true, ee.String("")
         )
 
-        matching_ecoregions = ee.Join.simple().apply(
-            self.ecoregions.filterBounds(poly), scl, self.intersects
+        matching_ecoregions = (
+            ee.Join.simple()
+            .apply(self.ecoregions.filterBounds(poly), scl, self.intersects)
+            .map(feature_area)
+            .sort("area", False)
         )
         biome_true = matching_ecoregions.first().get("BIOME_NUM")
         biome = ee.Algorithms.If(
