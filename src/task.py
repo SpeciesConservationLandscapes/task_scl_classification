@@ -6,6 +6,7 @@ import subprocess
 import numpy as np
 import pandas as pd
 import pyodbc
+import time
 import uuid
 from typing import Optional, Union
 
@@ -15,20 +16,50 @@ from pathlib import Path
 from task_base import SCLTask
 
 
-# noinspection PyTypeChecker,PyUnresolvedReferences
+class ConversionException(Exception):
+    pass
+
+
+# noinspection PyTypeChecker
 class SCLClassification(SCLTask):
     BUCKET = "scl-pipeline"
+    DATE_LABEL = "datestamp"
+    COUNTRY_LABEL = "country"
+    BIOME_LABEL = "biome"
+    RANGE_LABEL = "range"
+    EXTIRPATED_RANGE_LABEL = "extirpated_range"
+    # OBS_DECAY_RATE = -0.001  # for use with age in days
+    EE_NODATA = -9999
+    ZONES_LABEL = "Biome_zone"
     POINT_LOC_LABEL = "PointLocation"
     GRIDCELL_LOC_LABEL = "GridCellLocation"
     UNIQUE_ID_LABEL = "UniqueID"
-    DATE_LABEL = "datestamp"
-    OBS_DECAY_RATE = -0.001  # for use with age in days
+    DENSITY_LABEL = "Density"
+    CT_DAYS_OPERATING_LABEL = "Days"
+    CT_DAYS_DETECTED_LABEL = "detections"
+    SS_SEGMENTS_SURVEYED_LABEL = "NumberOfReplicatesSurveyed"
+    SS_SEGMENTS_DETECTED_LABEL = "detections"
+    MASTER_GRID_LABEL = "mastergrid"
+    MASTER_CELL_LABEL = "mastergridcell"
+    EE_ID_LABEL = "id"
+    SCLPOLY_ID = "poly_id"
+    ZONIFY_DF_COLUMNS = [
+        UNIQUE_ID_LABEL,
+        MASTER_GRID_LABEL,
+        MASTER_CELL_LABEL,
+        SCLPOLY_ID,
+    ]
 
     google_creds_path = "/.google_creds"
     inputs = {
-        "obs_adhoc": {"maxage": 50},
-        "obs_ss": {"maxage": 50},
-        "obs_ct": {"maxage": 50},
+        "obs_adhoc": {"maxage": 5},
+        "obs_ss": {"maxage": 5},
+        "obs_ct": {"maxage": 5},
+        "scl": {
+            "ee_type": SCLTask.FEATURECOLLECTION,
+            "ee_path": "scl_polys_path",
+            "maxage": 1 / 365,
+        },
         "historic_range": {
             "ee_type": SCLTask.IMAGE,
             "ee_path": "projects/SCL/v1/Panthera_tigris/historical_range_img_200914",
@@ -39,16 +70,31 @@ class SCLClassification(SCLTask):
             "ee_path": "projects/SCL/v1/Panthera_tigris/source/Inputs_2006/extirp_fin",
             "static": True,
         },
-        "scl": {
+        "zones": {
             "ee_type": SCLTask.FEATURECOLLECTION,
-            "ee_path": "scl_polys",
-            "maxage": 1 / 365,
+            "ee_path": "projects/SCL/v1/Panthera_tigris/zones",
+            "static": True,
+        },
+        "gridcells": {
+            "ee_type": SCLTask.FEATURECOLLECTION,
+            "ee_path": "projects/SCL/v1/Panthera_tigris/gridcells",
+            "static": True,
+        },
+        "countries": {
+            "ee_type": SCLTask.FEATURECOLLECTION,
+            "ee_path": "USDOS/LSIB/2017",
+            "static": True,
+        },
+        "ecoregions": {
+            "ee_type": SCLTask.FEATURECOLLECTION,
+            "ee_path": "RESOLVE/ECOREGIONS/2017",
+            "static": True,
         },
     }
     thresholds = {
         "landscape_size": 3,
         "current_range": 2,
-        "presence_score": 1,
+        "probability": 1,
         "landscape_survey_effort": 1,
     }
 
@@ -57,6 +103,7 @@ class SCLClassification(SCLTask):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.use_cache = kwargs.get("use_cache") or os.environ.get("use_cache") or False
 
         try:
             self.OBSDB_HOST = os.environ["OBSDB_HOST"]
@@ -80,31 +127,47 @@ class SCLClassification(SCLTask):
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = self.google_creds_path
 
         self._df_adhoc = self._df_ct = self._df_ss = None
-        self._fc_observations = None
         self.fc_csvs = []
         self.scl, _ = self.get_most_recent_featurecollection(
             self.inputs["scl"]["ee_path"]
         )
+        self.geofilter = ee.Geometry.MultiPolygon(
+            self.aoi, proj=self.crs, geodesic=False
+        )
+        self.zones = ee.FeatureCollection(self.inputs["zones"]["ee_path"])
+        self.gridcells = ee.FeatureCollection(
+            self.inputs["gridcells"]["ee_path"]
+        ).filterBounds(self.geofilter)
+        self.countries = ee.FeatureCollection(self.inputs["countries"]["ee_path"])
+        self.ecoregions = ee.FeatureCollection(self.inputs["ecoregions"]["ee_path"])
         self.historic_range = ee.Image(self.inputs["historic_range"]["ee_path"]).unmask(
             0
         )
         self.extirpated_range = ee.Image(self.inputs["extirpated_range"]["ee_path"]).eq(
             0
         )
+        # 0: neither historic or extirpated range
+        # 1: extirpated
+        # 2: historic
+        self.range_class = (
+            ee.Image(0)
+            .where(self.historic_range.eq(1), ee.Image(2))
+            .where(self.extirpated_range.eq(1), ee.Image(1))
+        ).selfMask()
         self.intersects = ee.Filter.intersects(".geo", None, ".geo")
 
         self.scl_poly_filters = {
             "scl_species": ee.Filter.And(
                 ee.Filter.gte("size", self.thresholds["landscape_size"]),
                 ee.Filter.eq("range", self.thresholds["current_range"]),
-                ee.Filter.gte("presence_score", self.thresholds["presence_score"]),
+                ee.Filter.gte("probability", self.thresholds["probability"]),
                 ee.Filter.gte("effort", self.thresholds["landscape_survey_effort"]),
             ),
             "scl_restoration": ee.Filter.Or(
                 ee.Filter.And(
                     ee.Filter.gte("size", self.thresholds["landscape_size"]),
                     ee.Filter.eq("range", self.thresholds["current_range"]),
-                    ee.Filter.lt("presence_score", self.thresholds["presence_score"]),
+                    ee.Filter.lt("probability", self.thresholds["probability"]),
                     ee.Filter.gte("effort", self.thresholds["landscape_survey_effort"]),
                 ),
                 ee.Filter.And(
@@ -115,18 +178,18 @@ class SCLClassification(SCLTask):
             "scl_survey": ee.Filter.And(
                 ee.Filter.gte("size", self.thresholds["landscape_size"]),
                 ee.Filter.eq("range", self.thresholds["current_range"]),
-                ee.Filter.gte("presence_score", self.thresholds["presence_score"]),
+                ee.Filter.gte("probability", self.thresholds["probability"]),
                 ee.Filter.lt("effort", self.thresholds["landscape_survey_effort"]),
             ),
             "scl_fragment": ee.Filter.And(
                 ee.Filter.lt("size", self.thresholds["landscape_size"]),
                 ee.Filter.eq("range", self.thresholds["current_range"]),
-                ee.Filter.gte("presence_score", self.thresholds["presence_score"]),
+                ee.Filter.gte("probability", self.thresholds["probability"]),
                 ee.Filter.gte("effort", self.thresholds["landscape_survey_effort"]),
             ),
         }
 
-    def scl_polys(self):
+    def scl_polys_path(self):
         return f"{self.ee_rootdir}/pothab/scl_polys"
 
     def poly_export(self, polys, scl_name):
@@ -209,10 +272,49 @@ class SCLClassification(SCLTask):
         df = pd.read_sql(query, obsconn)
         return df
 
-    def _obs_score(self, row):
-        age = self.taskdate - row[self.DATE_LABEL].to_pydatetime().date()
-        presence_score = (1 + self.OBS_DECAY_RATE) ** age.days
-        return presence_score
+    # add "mastergrid" and "mastergridcell" to df
+    def zonify(self, df):
+        # df with point geom if we have one, polygon otherwise, or drop if neither
+        obs_df = df[
+            [self.POINT_LOC_LABEL, self.GRIDCELL_LOC_LABEL, self.UNIQUE_ID_LABEL]
+        ]
+        obs_df = obs_df.dropna(
+            subset=[self.POINT_LOC_LABEL, self.GRIDCELL_LOC_LABEL], how="all"
+        )
+        obs_df = obs_df.assign(geom=obs_df[self.POINT_LOC_LABEL])
+        obs_df["geom"].loc[obs_df["geom"].isna()] = obs_df[self.GRIDCELL_LOC_LABEL]
+        obs_df = obs_df[["geom", self.UNIQUE_ID_LABEL]]
+        obs_df.set_index(self.UNIQUE_ID_LABEL, inplace=True)
+        obs_features = self.df2fc(obs_df).filterBounds(self.geofilter)
+
+        return_obs_features = obs_features.map(self.attribute_obs)
+        master_grid_df = self.fc2df(return_obs_features, self.ZONIFY_DF_COLUMNS)
+        if master_grid_df.empty:
+            master_grid_df[self.UNIQUE_ID_LABEL] = pd.Series(dtype="object")
+            master_grid_df[self.MASTER_GRID_LABEL] = pd.Series(dtype="object")
+            master_grid_df[self.MASTER_CELL_LABEL] = pd.Series(dtype="object")
+            master_grid_df[self.SCLPOLY_ID] = pd.Series(dtype="object")
+
+        df = pd.merge(left=df, right=master_grid_df)
+
+        # save out non-intersecting observations
+        df_nonintersections = df[
+            (df[self.MASTER_GRID_LABEL] == self.EE_NODATA)
+            | (df[self.MASTER_CELL_LABEL] == self.EE_NODATA)
+            | (df[self.SCLPOLY_ID] == self.EE_NODATA)
+        ]
+        if not df_nonintersections.empty:
+            timestr = time.strftime("%Y%m%d-%H%M%S")
+            df_nonintersections.to_csv(f"nonintersecting-{timestr}.csv")
+
+        # Filter out rows not in any zone and rows not in any gridcell (-9999)
+        df = df[
+            (df[self.MASTER_GRID_LABEL] != self.EE_NODATA)
+            & (df[self.MASTER_CELL_LABEL] != self.EE_NODATA)
+            & (df[self.SCLPOLY_ID] != self.EE_NODATA)
+        ]
+
+        return df
 
     def fc2df(self, featurecollection, columns=None):
         df = pd.DataFrame()
@@ -264,166 +366,235 @@ class SCLClassification(SCLTask):
     @property
     def df_adhoc(self):
         if self._df_adhoc is None:
-            query = (
-                f"SELECT {self.UNIQUE_ID_LABEL}, "
-                f"{self.POINT_LOC_LABEL}, "
-                f"{self.GRIDCELL_LOC_LABEL}, "
-                f"EndObservationDate AS {self.DATE_LABEL} "
-                f"FROM dbo.vw_CI_AdHocObservation "
-                f"WHERE DATEDIFF(YEAR, EndObservationDate, '{self.taskdate}') <= {self.inputs['obs_adhoc']['maxage']} "
-                f"AND EndObservationDate <= Cast('{self.taskdate}' AS datetime) "
-            )
-            self._df_adhoc = self._get_df(query)
+            _csvpath = "adhoc.csv"
+            if self.use_cache and Path(_csvpath).is_file():
+                self._df_adhoc = pd.read_csv(
+                    _csvpath, encoding="utf-8", index_col=self.MASTER_CELL_LABEL
+                )
+            else:
+                query = (
+                    f"SELECT {self.UNIQUE_ID_LABEL}, "
+                    f"{self.POINT_LOC_LABEL}, "
+                    f"{self.GRIDCELL_LOC_LABEL}, "
+                    f"EndObservationDate AS {self.DATE_LABEL}, "
+                    f"{self.DENSITY_LABEL} "
+                    f"FROM dbo.vw_CI_AdHocObservation "
+                    f"WHERE DATEDIFF(YEAR, EndObservationDate, '{self.taskdate}') <= {self.inputs['obs_adhoc']['maxage']} "
+                    f"AND EndObservationDate <= Cast('{self.taskdate}' AS datetime) "
+                )
+                self._df_adhoc = self._get_df(query)
+                print("zonify adhoc")
+                self._df_adhoc = self.zonify(self._df_adhoc)
+                self._df_adhoc.set_index(self.MASTER_CELL_LABEL, inplace=True)
+
+            if self.use_cache and not self._df_adhoc.empty:
+                self._df_adhoc.to_csv(_csvpath)
 
         return self._df_adhoc
 
     @property
     def df_cameratrap(self):
         if self._df_ct is None:
-            query = (
-                f"SELECT {self.UNIQUE_ID_LABEL}, "
-                f"CameraTrapDeploymentID, "
-                f"{self.POINT_LOC_LABEL}, "
-                f"{self.GRIDCELL_LOC_LABEL}, "
-                f"PickupDatetime AS {self.DATE_LABEL} "
-                f"FROM dbo.vw_CI_CameraTrapDeployment "
-                f"WHERE DATEDIFF(YEAR, PickupDatetime, '{self.taskdate}') <= {self.inputs['obs_ct']['maxage']} "
-                f"AND PickupDatetime <= Cast('{self.taskdate}' AS datetime) "
-            )
-            df_ct_dep = self._get_df(query)
-            df_ct_dep.set_index("CameraTrapDeploymentID", inplace=True)
+            _csvpath = "cameratrap.csv"
+            if self.use_cache and Path(_csvpath).is_file():
+                self._df_ct = pd.read_csv(
+                    _csvpath, encoding="utf-8", index_col="CameraTrapDeploymentID"
+                )
+            else:
+                query = (
+                    f"SELECT {self.UNIQUE_ID_LABEL}, "
+                    f"CameraTrapDeploymentID, "
+                    f"{self.POINT_LOC_LABEL}, "
+                    f"{self.GRIDCELL_LOC_LABEL}, "
+                    f"PickupDatetime AS {self.DATE_LABEL}, "
+                    f"{self.CT_DAYS_OPERATING_LABEL} "
+                    f"FROM dbo.vw_CI_CameraTrapDeployment "
+                    f"WHERE DATEDIFF(YEAR, PickupDatetime, '{self.taskdate}') <= {self.inputs['obs_ct']['maxage']} "
+                    f"AND PickupDatetime <= Cast('{self.taskdate}' AS datetime) "
+                )
+                df_ct_dep = self._get_df(query)
+                print("zonify camera trap deployments")
+                df_ct_dep = self.zonify(df_ct_dep)
+                df_ct_dep.set_index("CameraTrapDeploymentID", inplace=True)
 
-            query = (
-                f"SELECT * FROM dbo.vw_CI_CameraTrapObservation "
-                f"WHERE DATEDIFF(YEAR, ObservationDate, '{self.taskdate}') <= "
-                f"{self.inputs['obs_ct']['maxage']} "
-                f"AND ObservationDate <= Cast('{self.taskdate}' AS date) "
-            )
-            df_ct_obs = self._get_df(query)
+                query = (
+                    f"SELECT * FROM dbo.vw_CI_CameraTrapObservation "
+                    f"WHERE DATEDIFF(YEAR, ObservationDate, '{self.taskdate}') <= "
+                    f"{self.inputs['obs_ct']['maxage']} "
+                    f"AND ObservationDate <= Cast('{self.taskdate}' AS date) "
+                )
+                df_ct_obs = self._get_df(query)
 
-            df_ct_obs.set_index("CameraTrapDeploymentID", inplace=True)
-            df_ct_obs["detections"] = (
-                df_ct_obs["AdultMaleCount"]
-                + df_ct_obs["AdultFemaleCount"]
-                + df_ct_obs["AdultSexUnknownCount"]
-                + df_ct_obs["SubAdultCount"]
-                + df_ct_obs["YoungCount"]
-            )
-            df_ct_obs["detections"].fillna(0, inplace=True)
+                df_ct_obs.set_index("CameraTrapDeploymentID", inplace=True)
+                df_ct_obs[self.CT_DAYS_DETECTED_LABEL] = (
+                    df_ct_obs["AdultMaleCount"]
+                    + df_ct_obs["AdultFemaleCount"]
+                    + df_ct_obs["AdultSexUnknownCount"]
+                    + df_ct_obs["SubAdultCount"]
+                    + df_ct_obs["YoungCount"]
+                )
+                df_ct_obs[self.CT_DAYS_DETECTED_LABEL].fillna(0, inplace=True)
 
-            # number of days with > 0 detections per camera
-            df_ct_obsdays = (
-                df_ct_obs[df_ct_obs["detections"] > 0]
-                .groupby(["CameraTrapDeploymentID"])
-                .count()
-            )
-            _df_ct = pd.merge(
-                left=df_ct_dep,
-                right=df_ct_obsdays,
-                left_index=True,
-                right_index=True,
-                how="left",
-            )
-            _df_ct["detections"].fillna(0, inplace=True)
-            _df_ct.rename(columns={"UniqueID_x": self.UNIQUE_ID_LABEL}, inplace=True)
-            self._df_ct = _df_ct.loc[_df_ct["detections"] > 0]
+                # number of days with > 0 detections per camera
+                df_ct_obsdays = (
+                    df_ct_obs[df_ct_obs[self.CT_DAYS_DETECTED_LABEL] > 0]
+                    .groupby(["CameraTrapDeploymentID"])
+                    .count()
+                )
+                self._df_ct = pd.merge(
+                    left=df_ct_dep,
+                    right=df_ct_obsdays,
+                    left_index=True,
+                    right_index=True,
+                    how="left",
+                )
+                self._df_ct[self.CT_DAYS_DETECTED_LABEL].fillna(0, inplace=True)
+                self._df_ct.rename(
+                    columns={"UniqueID_x": self.UNIQUE_ID_LABEL}, inplace=True
+                )
+
+            if self.use_cache and not self._df_ct.empty:
+                self._df_ct.to_csv(_csvpath)
 
         return self._df_ct
 
     @property
     def df_signsurvey(self):
         if self._df_ss is None:
-            query = (
-                f"SELECT {self.UNIQUE_ID_LABEL}, "
-                f"{self.POINT_LOC_LABEL}, "
-                f"{self.GRIDCELL_LOC_LABEL}, "
-                f"StartDate AS {self.DATE_LABEL}, "
-                f"detections "
-                f"FROM dbo.vw_CI_SignSurveyObservation "
-                f"WHERE DATEDIFF(YEAR, StartDate, '{self.taskdate}') <= {self.inputs['obs_ss']['maxage']} "
-                f"AND StartDate <= Cast('{self.taskdate}' AS datetime) "
-            )
-            _df_ss = self._get_df(query)
-            self._df_ss = _df_ss.loc[_df_ss["detections"] > 0]
+            _csvpath = "signsurvey.csv"
+            if self.use_cache and Path(_csvpath).is_file():
+                self._df_ss = pd.read_csv(
+                    _csvpath, encoding="utf-8", index_col=self.MASTER_CELL_LABEL
+                )
+            else:
+                query = (
+                    f"SELECT {self.UNIQUE_ID_LABEL}, "
+                    f"{self.POINT_LOC_LABEL}, "
+                    f"{self.GRIDCELL_LOC_LABEL}, "
+                    f"StartDate AS {self.DATE_LABEL}, "
+                    f"{self.SS_SEGMENTS_SURVEYED_LABEL}, "
+                    f"{self.SS_SEGMENTS_DETECTED_LABEL} "
+                    f"FROM dbo.vw_CI_SignSurveyObservation "
+                    f"WHERE DATEDIFF(YEAR, StartDate, '{self.taskdate}') <= {self.inputs['obs_ss']['maxage']} "
+                    f"AND StartDate <= Cast('{self.taskdate}' AS datetime) "
+                )
+                self._df_ss = self._get_df(query)
+                print("zonify sign survey")
+                self._df_ss = self.zonify(self._df_ss)
+                self._df_ss.set_index(self.MASTER_CELL_LABEL, inplace=True)
+
+            if self.use_cache and not self._df_ss.empty:
+                self._df_ss.to_csv(_csvpath)
 
         return self._df_ss
 
     @property
-    def fc_observations(self):
-        if self._fc_observations is None:
-            obs_dfs = []
-            for df in [self.df_adhoc, self.df_cameratrap, self.df_signsurvey]:
-                # df with point geom if we have one, polygon otherwise, or drop if neither
-                obs_df = df[
-                    [
-                        self.UNIQUE_ID_LABEL,
-                        self.POINT_LOC_LABEL,
-                        self.GRIDCELL_LOC_LABEL,
-                        self.DATE_LABEL,
-                    ]
-                ]
-                obs_df = obs_df.dropna(
-                    subset=[
-                        self.POINT_LOC_LABEL,
-                        self.GRIDCELL_LOC_LABEL,
-                        self.DATE_LABEL,
-                    ],
-                    how="all",
-                )
-                obs_df = obs_df.assign(geom=obs_df[self.POINT_LOC_LABEL])
-                obs_df.loc[obs_df["geom"].isna(), "geom"] = obs_df[
-                    self.GRIDCELL_LOC_LABEL
-                ]
-                obs_df["presence_score"] = obs_df.apply(
-                    lambda row: self._obs_score(row), axis=1
-                )
-                obs_df = obs_df[[self.UNIQUE_ID_LABEL, "geom", "presence_score"]]
-                obs_df.set_index(self.UNIQUE_ID_LABEL, inplace=True)
-                # print(obs_df)
-                obs_dfs.append(obs_df)
+    def scl_polys(self):
+        return self.scl.map(self.attribute_scl)
 
-            merged_obs_df = pd.concat(obs_dfs)
-            self._fc_observations = self.df2fc(merged_obs_df)
+    def attribute_scl(self, scl):
+        # TODO: take country/biome from intersected polygon with the largest area
+        poly = scl.geometry()
 
-        return self._fc_observations
-
-    def presence_score(self, sclpoly):
-        obs_in_sclpoly = ee.Join.simple().apply(
-            self.fc_observations, sclpoly, self.intersects
+        matching_countries = ee.Join.simple().apply(
+            self.countries.filterBounds(poly), scl, self.intersects
         )
-        score_true = obs_in_sclpoly.aggregate_sum("presence_score")
-        score = ee.Algorithms.If(obs_in_sclpoly.size().gte(1), score_true, 0)
-        return sclpoly.set("presence_score", score)
+        country_true = matching_countries.first().get("COUNTRY_NA")
+        country = ee.Algorithms.If(
+            matching_countries.size().gte(1), country_true, ee.String("")
+        )
+
+        matching_ecoregions = ee.Join.simple().apply(
+            self.ecoregions.filterBounds(poly), scl, self.intersects
+        )
+        biome_true = matching_ecoregions.first().get("BIOME_NUM")
+        biome = ee.Algorithms.If(
+            matching_ecoregions.size().gte(1), biome_true, ee.Number(self.EE_NODATA)
+        )
+
+        range = self.range_class.reduceRegion(
+            geometry=poly, reducer=ee.Reducer.mode(), scale=self.scale, crs=self.crs
+        )
+
+        return scl.set(
+            {
+                self.COUNTRY_LABEL: country,
+                self.BIOME_LABEL: biome,
+                self.RANGE_LABEL: range,
+            }
+        )
+
+    def attribute_obs(self, obs_feature):
+        centroid = obs_feature.centroid().geometry()
+
+        matching_zones = ee.Join.simple().apply(
+            self.zones, obs_feature, self.intersects
+        )
+        zone_id_true = ee.Number(matching_zones.first().get(self.ZONES_LABEL))
+        id_false = ee.Number(self.EE_NODATA)
+        zone_id = ee.Number(
+            ee.Algorithms.If(matching_zones.size().gte(1), zone_id_true, id_false)
+        )
+
+        matching_gridcells = self.gridcells.filter(
+            ee.Filter.eq("zone", zone_id)
+        ).filterBounds(centroid)
+        gridcell_id_true = ee.Number(matching_gridcells.first().get(self.EE_ID_LABEL))
+        gridcell_id = ee.Number(
+            ee.Algorithms.If(
+                zone_id.neq(self.EE_NODATA),
+                ee.Algorithms.If(
+                    matching_gridcells.size().gte(1), gridcell_id_true, id_false
+                ),
+                id_false,
+            )
+        )
+
+        matching_polys = ee.Join.simple().apply(
+            self.scl_polys, obs_feature, self.intersects
+        )
+        poly_true = matching_polys.first().get(self.EE_ID_LABEL)
+        poly = ee.Algorithms.If(matching_polys.size().gte(1), poly_true, id_false)
+
+        obs_feature = obs_feature.setMulti(
+            {
+                self.MASTER_GRID_LABEL: zone_id,
+                self.MASTER_CELL_LABEL: gridcell_id,
+                self.SCLPOLY_ID: poly,
+            }
+        )
+
+        return obs_feature
 
     def calc(self):
-        range_binary = (
-            ee.Image(0)
-            .where(self.historic_range.eq(1), ee.Image(2))
-            .where(self.extirpated_range.eq(1), ee.Image(1))
-        ).selfMask()
+        # print(self.scl_polys.limit(5).getInfo())
+        _csvpath = "scl_polys.csv"
+        if self.use_cache:
+            prob_columns = [
+                "system:index",
+                "biome",
+                "country",
+            ]
+            df_scl_polys = self.fc2df(self.scl_polys, columns=prob_columns)
+            df_scl_polys.rename(columns={"system:index": self.SCLPOLY_ID}, inplace=True)
+            df_scl_polys.set_index(self.SCLPOLY_ID, inplace=True)
+            df_scl_polys.to_csv(_csvpath)
+        # self.export_fc_ee(scl_polys, "scratch/scl_polys_attributed")
+        print(self.df_adhoc)
 
-        scl_polys = range_binary.reduceRegions({
-            collection: self.scl,
-            reducer: ee.Reducer.max(),
-            scale: scale,
-            crs: crs
-        })
+        # temporary code here to:
+        # convert polys csv Charles sends to fc
+        # scl_scored = self.scl_polys mapped to transfer probability/effort results
 
-        # TODO: Should the different dfs be treated differently?
-        # TODO: evaluate score assigned by time-weighting function
-        # TODO: replace presence_score with probability and effort from Charles
-        # Plan: manually ingest results from Charles, join to self.scl, then apply filters with `probability`
-        # instead of doing .map(self.presence_score)
-        scl_scored = scl_polys.map(self.presence_score)
-        scl_species = scl_scored.filter(self.scl_poly_filters["scl_species"])
-        scl_survey = scl_scored.filter(self.scl_poly_filters["scl_survey"])
-        scl_restoration = scl_scored.filter(self.scl_poly_filters["scl_restoration"])
-        scl_fragment = scl_scored.filter(self.scl_poly_filters["scl_fragment"])
-
-        self.poly_export(scl_species, "scl_species")
-        self.poly_export(scl_survey, "scl_survey")
-        self.poly_export(scl_restoration, "scl_restoration")
-        self.poly_export(scl_fragment, "scl_fragment")
+        # scl_species = scl_scored.filter(self.scl_poly_filters["scl_species"])
+        # scl_survey = scl_scored.filter(self.scl_poly_filters["scl_survey"])
+        # scl_restoration = scl_scored.filter(self.scl_poly_filters["scl_restoration"])
+        # scl_fragment = scl_scored.filter(self.scl_poly_filters["scl_fragment"])
+        #
+        # self.poly_export(scl_species, "scl_species")
+        # self.poly_export(scl_survey, "scl_survey")
+        # self.poly_export(scl_restoration, "scl_restoration")
+        # self.poly_export(scl_fragment, "scl_fragment")
 
     def check_inputs(self):
         super().check_inputs()
@@ -448,6 +619,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-d", "--taskdate")
     parser.add_argument("-s", "--species")
+    parser.add_argument("-u", "--use-cache", action="store_true")
     parser.add_argument("--scenario")
     parser.add_argument(
         "--overwrite",
