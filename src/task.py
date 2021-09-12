@@ -67,22 +67,22 @@ class SCLClassification(SCLTask):
         },
         "historic_range": {
             "ee_type": SCLTask.IMAGE,
-            "ee_path": "projects/SCL/v1/Panthera_tigris/historical_range_img_200914",
+            "ee_path": "historical_range_path",
             "static": True,
         },
         "extirpated_range": {
             "ee_type": SCLTask.IMAGE,
-            "ee_path": "projects/SCL/v1/Panthera_tigris/source/Inputs_2006/extirp_fin",
+            "ee_path": "extirpated_range_path",
             "static": True,
         },
         "zones": {
             "ee_type": SCLTask.FEATURECOLLECTION,
-            "ee_path": "projects/SCL/v1/Panthera_tigris/zones",
+            "ee_path": "zones_path",
             "static": True,
         },
         "gridcells": {
             "ee_type": SCLTask.FEATURECOLLECTION,
-            "ee_path": "projects/SCL/v1/Panthera_tigris/gridcells",
+            "ee_path": "gridcells_path",
             "static": True,
         },
         "countries": {
@@ -145,11 +145,16 @@ class SCLClassification(SCLTask):
         ).filterBounds(self.geofilter)
         self.countries = ee.FeatureCollection(self.inputs["countries"]["ee_path"])
         self.ecoregions = ee.FeatureCollection(self.inputs["ecoregions"]["ee_path"])
-        self.historic_range = ee.Image(self.inputs["historic_range"]["ee_path"]).unmask(
-            0
+
+        self.historic_range = (
+            ee.FeatureCollection(self.inputs["historic_range"]["ee_path"])
+            .reduceToImage(["TCL_histor"], ee.Reducer.first())
+            .unmask(0)
         )
-        self.extirpated_range = ee.Image(self.inputs["extirpated_range"]["ee_path"]).eq(
-            0
+        self.extirpated_range = (
+            ee.FeatureCollection(self.inputs["extirpated_range"]["ee_path"])
+            .reduceToImage(["TCL_extirp"], ee.Reducer.first())
+            .unmask(0)
         )
         # 0: neither historic or extirpated range
         # 1: extirpated
@@ -196,6 +201,18 @@ class SCLClassification(SCLTask):
 
     def scl_polys_path(self):
         return f"{self.ee_rootdir}/pothab/scl_polys"
+
+    def historical_range_path(self):
+        return f"{self.speciesdir}/historical_range"
+
+    def extirpated_range_path(self):
+        return f"{self.speciesdir}/extirpated_range"
+
+    def zones_path(self):
+        return f"{self.speciesdir}/zones"
+
+    def gridcells_path(self):
+        return f"{self.speciesdir}/gridcells"
 
     def poly_export(self, polys, scl_name):
         size_test = polys.size().gt(0).getInfo()
