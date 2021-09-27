@@ -53,8 +53,8 @@ class SCLClassification(SCLTask):
     # labels used in classification
     HABITAT_AREA = "connected_eff_pot_hab_area"
     MIN_PATCHSIZE = "min_patch_size"
-    PROBABILITY = "probability"
-    EFFORT = "effort"
+    PROBABILITY = "phi_3"
+    EFFORT = "eff_3"
     RANGE = "range"
 
     google_creds_path = "/.google_creds"
@@ -89,10 +89,9 @@ class SCLClassification(SCLTask):
         },
     }
     thresholds = {
-        "landscape_size": 3,
         "current_range": 2,
-        "probability": 1,
-        "landscape_survey_effort": 1,
+        "probability": 0.99,
+        "survey_effort": 0.6,
     }
 
     def scenario_habitat(self):
@@ -157,7 +156,7 @@ class SCLClassification(SCLTask):
                     ee.Filter.eq(self.RANGE, self.thresholds["current_range"]),
                     ee.Filter.lt(self.PROBABILITY, self.thresholds["probability"]),
                     ee.Filter.gte(
-                        self.EFFORT, self.thresholds["landscape_survey_effort"]
+                        self.EFFORT, self.thresholds["survey_effort"]
                     ),
                 ),
                 ee.Filter.And(
@@ -175,22 +174,36 @@ class SCLClassification(SCLTask):
                 ee.Filter.eq(self.RANGE, self.thresholds["current_range"]),
                 ee.Filter.lt(self.PROBABILITY, self.thresholds["probability"]),
                 ee.Filter.lt(  # you haven't put in enough effort to lower the probability a critter is present
-                    self.EFFORT, self.thresholds["landscape_survey_effort"]
+                    self.EFFORT, self.thresholds["survey_effort"]
                 ),
             ),
-            "scl_fragment": ee.Filter.And(
+            "scl_fragment_historical_presence": ee.Filter.And(
+                ee.Filter.lessThan(
+                    leftField=self.HABITAT_AREA, rightField=self.MIN_PATCHSIZE
+                ),
+                ee.Filter.eq(self.RANGE, self.thresholds["current_range"]),
+                ee.Filter.gte(self.PROBABILITY, self.thresholds["probability"]),
+            ),
+            "scl_fragment_historical_nopresence": ee.Filter.And(
                 ee.Filter.lessThan(
                     leftField=self.HABITAT_AREA, rightField=self.MIN_PATCHSIZE
                 ),
                 ee.Filter.eq(self.RANGE, self.thresholds["current_range"]),
                 ee.Filter.lt(self.PROBABILITY, self.thresholds["probability"]),
             ),
-            "scl_species_fragment": ee.Filter.And(
+            "scl_fragment_extirpated_presence": ee.Filter.And(
                 ee.Filter.lessThan(
                     leftField=self.HABITAT_AREA, rightField=self.MIN_PATCHSIZE
                 ),
-                ee.Filter.eq(self.RANGE, self.thresholds["current_range"]),
+                ee.Filter.lt(self.RANGE, self.thresholds["current_range"]),
                 ee.Filter.gte(self.PROBABILITY, self.thresholds["probability"]),
+            ),
+            "scl_fragment_extirpated_nopresence": ee.Filter.And(
+                ee.Filter.lessThan(
+                    leftField=self.HABITAT_AREA, rightField=self.MIN_PATCHSIZE
+                ),
+                ee.Filter.lt(self.RANGE, self.thresholds["current_range"]),
+                ee.Filter.lt(self.PROBABILITY, self.thresholds["probability"]),
             ),
         }
 
@@ -536,8 +549,8 @@ class SCLClassification(SCLTask):
         def _assign_ids(item):
             item = ee.List(item)
             feature = ee.Feature(item.get(0))
-            id = item.get(1)
-            return feature.set({self.SCLPOLY_ID: id})
+            poly_id = item.get(1)
+            return feature.set({self.SCLPOLY_ID: poly_id})
 
         ids = ee.List.sequence(1, self.scl.size())
         scl_poly_list = ee.List(self.scl.toList(self.scl.size()))
@@ -561,6 +574,9 @@ class SCLClassification(SCLTask):
                 self.BIOME,
                 self.COUNTRY,
             ]
+
+            # for join debugging
+            self.export_fc_ee(self.scl_polys, "assigned_scl_polys")
 
             df_scl_polys = self.fc2df(self.scl_polys, columns=prob_columns)
             df_scl_polys.set_index(self.SCLPOLY_ID, inplace=True)
@@ -589,7 +605,7 @@ class SCLClassification(SCLTask):
         #
         # scl_scored = (
         #     ee.Join.inner("primary", "secondary")
-        #     .apply(self.scl, probout, ee.Filter.equals(
+        #     .apply(self.scl_polys, probout, ee.Filter.equals(
         #       leftField=self.SCLPOLY_ID,
         #       rightField=self.SCLPOLY_ID,
         #     ))
@@ -598,8 +614,18 @@ class SCLClassification(SCLTask):
         # scl_species = scl_scored.filter(self.scl_poly_filters["scl_species"])
         # scl_survey = scl_scored.filter(self.scl_poly_filters["scl_survey"])
         # scl_restoration = scl_scored.filter(self.scl_poly_filters["scl_restoration"])
-        # scl_fragment = scl_scored.filter(self.scl_poly_filters["scl_fragment"])
-        # scl_species_fragment = scl_scored.filter(self.scl_poly_filters["scl_species_fragment"])
+        # scl_fragment_historical_presence = scl_scored.filter(self.scl_poly_filters["scl_fragment_historical_presence"])
+        # scl_fragment_historical_nopresence = scl_scored.filter(self.scl_poly_filters["scl_fragment_historical_nopresence"])
+        # scl_fragment_extirpated_presence = scl_scored.filter(self.scl_poly_filters["scl_fragment_extirpated_presence"])
+        # scl_fragment_extirpated_nopresence = scl_scored.filter(self.scl_poly_filters["scl_fragment_extirpated_nopresence"])
+
+        # - reassembly, adding sum band attributes (eff_pot_hab_area, connected_eff_pot_hab_area, polygon_area):
+        #     - dissolve fragments_historical_presence into species
+        #     - dissolve fragments_historical_nopresence into survey
+        #     - dissolve fragments_extirp_presence into restoration
+        #     - discard fragments_extirp_nopresence
+        #     - dissolve any polygons with the same classification
+        # - final scl_fragment that gets exported below is subset of original scl_fragment_historical_presence
 
         # self.poly_export(scl_species, "scl_species")
         # self.poly_export(scl_survey, "scl_survey")
