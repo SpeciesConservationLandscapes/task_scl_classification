@@ -155,9 +155,7 @@ class SCLClassification(SCLTask):
                     ),
                     ee.Filter.eq(self.RANGE, self.thresholds["current_range"]),
                     ee.Filter.lt(self.PROBABILITY, self.thresholds["probability"]),
-                    ee.Filter.gte(
-                        self.EFFORT, self.thresholds["survey_effort"]
-                    ),
+                    ee.Filter.gte(self.EFFORT, self.thresholds["survey_effort"]),
                 ),
                 ee.Filter.And(
                     ee.Filter.greaterThanOrEquals(
@@ -261,15 +259,12 @@ class SCLClassification(SCLTask):
         except TypeError:
             return None
 
-    def _cp_storage_to_ee_table(
-        self, blob_uri: str, table_asset_id: str, geofield: str = "geom"
-    ) -> str:
+    def _cp_storage_to_ee_table(self, blob_uri: str, table_asset_id: str) -> str:
         try:
             cmd = [
                 "/usr/local/bin/earthengine",
                 f"--service_account_file={self.google_creds_path}",
                 "upload table",
-                f"--primary_geometry_column {geofield}",
                 f"--asset_id={table_asset_id}",
                 blob_uri,
             ]
@@ -382,9 +377,7 @@ class SCLClassification(SCLTask):
         self._remove_from_cloudstorage(f"{blob}.csv")
         return df
 
-    def df2fc(
-        self, df: pd.DataFrame, geofield: str = "geom"
-    ) -> Optional[ee.FeatureCollection]:
+    def df2fc(self, df: pd.DataFrame) -> Optional[ee.FeatureCollection]:
         tempfile = str(uuid.uuid4())
         blob = f"prob/{self.species}/{self.scenario}/{self.taskdate}/{tempfile}"
         if df.empty:
@@ -395,7 +388,7 @@ class SCLClassification(SCLTask):
         self._upload_to_cloudstorage(f"{tempfile}.csv", f"{blob}.csv")
         table_asset_name, table_asset_id = self._prep_asset_id(f"scratch/{tempfile}")
         task_id = self._cp_storage_to_ee_table(
-            f"gs://{self.BUCKET}/{blob}.csv", table_asset_id, geofield
+            f"gs://{self.BUCKET}/{blob}.csv", table_asset_id
         )
         self.wait()
         self._remove_from_cloudstorage(f"{blob}.csv")
@@ -565,6 +558,27 @@ class SCLClassification(SCLTask):
             crs=self.crs,
         )
 
+    def dissolve(self, polys, core_label, fragment_label):
+        cores = polys.filter(self.scl_poly_filters[core_label])
+        fragments = polys.filter(self.scl_poly_filters[fragment_label])
+
+        def _item_to_classified_feature(item):
+            geom = ee.Geometry.Polygon(item)
+            contained = cores.geometry().intersects(geom)
+            lstype = ee.Algorithms.If(contained, core_label, fragment_label)
+            return ee.Feature(geom, {"lstype": ee.String(lstype)})
+
+        dissolved_list = cores.merge(fragments).geometry().dissolve().coordinates()
+        dissolved_polys = ee.FeatureCollection(
+            dissolved_list.map(_item_to_classified_feature)
+        )
+        dissolved_cores = dissolved_polys.filter(ee.Filter.eq("lstype", core_label))
+        dissolved_fragments = dissolved_polys.filter(
+            ee.Filter.eq("lstype", fragment_label)
+        )
+
+        return dissolved_cores, dissolved_fragments
+
     def calc(self):
         # Temporary: export dataframes needed for probability modeling
         # Make sure cache csvs don't exist locally before running
@@ -588,49 +602,50 @@ class SCLClassification(SCLTask):
         print(self.df_signsurvey)
 
         # Temporary: ingest probability model output csv, join to polys, and do classification
-        # probout = self.df2fc(
-        #     pd.read_csv("scl_polys_out.csv", encoding="utf-8", index_col=self.SCLPOLY_ID),
-        #     geofield=None
-        # )
-        #
-        # def _flatten_fields(feat):
-        #     primary_feature = ee.Feature(feat.get("primary"))
-        #     secondary_feature = ee.Feature(feat.get("secondary"))
-        #     return_feat = ee.Feature(
-        #         primary_feature.geometry(),
-        #         primary_feature.toDictionary()
-        #         .combine(secondary_feature.toDictionary())
-        #     )
-        #     return return_feat
-        #
-        # scl_scored = (
-        #     ee.Join.inner("primary", "secondary")
-        #     .apply(self.scl_polys, probout, ee.Filter.equals(
-        #       leftField=self.SCLPOLY_ID,
-        #       rightField=self.SCLPOLY_ID,
-        #     ))
-        # ).map(_flatten_fields)
-        #
-        # scl_species = scl_scored.filter(self.scl_poly_filters["scl_species"])
-        # scl_survey = scl_scored.filter(self.scl_poly_filters["scl_survey"])
-        # scl_restoration = scl_scored.filter(self.scl_poly_filters["scl_restoration"])
-        # scl_fragment_historical_presence = scl_scored.filter(self.scl_poly_filters["scl_fragment_historical_presence"])
-        # scl_fragment_historical_nopresence = scl_scored.filter(self.scl_poly_filters["scl_fragment_historical_nopresence"])
-        # scl_fragment_extirpated_presence = scl_scored.filter(self.scl_poly_filters["scl_fragment_extirpated_presence"])
-        # scl_fragment_extirpated_nopresence = scl_scored.filter(self.scl_poly_filters["scl_fragment_extirpated_nopresence"])
+        probout = self.df2fc(
+            pd.read_csv(
+                "scl_polys_out.csv", encoding="utf-8", index_col=self.SCLPOLY_ID
+            ),
+        )
 
-        # - reassembly, adding sum band attributes (eff_pot_hab_area, connected_eff_pot_hab_area, polygon_area):
-        #     - dissolve fragments_historical_presence into species
-        #     - dissolve fragments_historical_nopresence into survey
-        #     - dissolve fragments_extirp_presence into restoration
-        #     - discard fragments_extirp_nopresence
-        #     - dissolve any polygons with the same classification
-        # - final scl_fragment that gets exported below is subset of original scl_fragment_historical_presence
+        def _flatten_fields(feat):
+            primary_feature = ee.Feature(feat.get("primary"))
+            secondary_feature = ee.Feature(feat.get("secondary"))
+            return_feat = ee.Feature(
+                primary_feature.geometry(),
+                primary_feature.toDictionary().combine(
+                    secondary_feature.toDictionary()
+                ),
+            )
+            return return_feat
 
-        # self.poly_export(scl_species, "scl_species")
-        # self.poly_export(scl_survey, "scl_survey")
-        # self.poly_export(scl_restoration, "scl_restoration")
-        # self.poly_export(scl_fragment, "scl_fragment")
+        scl_scored = (
+            ee.Join.inner("primary", "secondary").apply(
+                self.scl_polys,
+                probout,
+                ee.Filter.equals(
+                    leftField=self.SCLPOLY_ID,
+                    rightField=self.SCLPOLY_ID,
+                ),
+            )
+        ).map(_flatten_fields)
+
+        scl_species, scl_species_fragment = self.dissolve(
+            scl_scored, "scl_species", "scl_fragment_historical_presence"
+        )
+        scl_survey, scl_survey_fragment = self.dissolve(
+            scl_scored, "scl_survey", "scl_fragment_historical_nopresence"
+        )
+        scl_restoration, scl_restoration_fragment = self.dissolve(
+            scl_scored, "scl_restoration", "scl_fragment_extirpated_presence"
+        )
+
+        self.poly_export(scl_species, "scl_species")
+        self.poly_export(scl_species_fragment, "scl_species_fragment")
+        self.poly_export(scl_survey, "scl_survey")
+        self.poly_export(scl_survey_fragment, "scl_survey_fragment")
+        self.poly_export(scl_restoration, "scl_restoration")
+        self.poly_export(scl_restoration_fragment, "scl_restoration_fragment")
 
     def check_inputs(self):
         super().check_inputs()
