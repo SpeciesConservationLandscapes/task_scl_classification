@@ -51,7 +51,8 @@ class SCLClassification(SCLTask):
     ]
 
     # labels used in classification
-    HABITAT_AREA = "connected_eff_pot_hab_area"
+    HABITAT_AREA = "eff_pot_hab_area"
+    CONNECTED_HABITAT_AREA = "connected_eff_pot_hab_area"
     MIN_PATCHSIZE = "min_patch_size"
     PROBABILITY = "phi_3"
     EFFORT = "eff_3"
@@ -65,6 +66,11 @@ class SCLClassification(SCLTask):
         "scl": {
             "ee_type": SCLTask.FEATURECOLLECTION,
             "ee_path": "scl_polys_path",
+            "maxage": 1 / 365,
+        },
+        "scl_image": {
+            "ee_type": SCLTask.IMAGECOLLECTION,
+            "ee_path": "scl_image_path",
             "maxage": 1 / 365,
         },
         "zones": {
@@ -127,6 +133,9 @@ class SCLClassification(SCLTask):
         self.scl, _ = self.get_most_recent_featurecollection(
             self.inputs["scl"]["ee_path"]
         )
+        self.scl_image, _ = self.get_most_recent_image(
+            ee.ImageCollection(self.inputs["scl_image"]["ee_path"])
+        )
         self.geofilter = ee.Geometry.MultiPolygon(
             self.aoi, proj=self.crs, geodesic=False
         )
@@ -142,7 +151,7 @@ class SCLClassification(SCLTask):
         self.scl_poly_filters = {
             "scl_species": ee.Filter.And(
                 ee.Filter.greaterThanOrEquals(
-                    leftField=self.HABITAT_AREA, rightField=self.MIN_PATCHSIZE
+                    leftField=self.CONNECTED_HABITAT_AREA, rightField=self.MIN_PATCHSIZE
                 ),
                 ee.Filter.eq(self.RANGE, self.thresholds["current_range"]),
                 ee.Filter.gte(self.PROBABILITY, self.thresholds["probability"]),
@@ -150,7 +159,7 @@ class SCLClassification(SCLTask):
             "scl_restoration": ee.Filter.Or(
                 ee.Filter.And(
                     ee.Filter.greaterThanOrEquals(
-                        leftField=self.HABITAT_AREA,
+                        leftField=self.CONNECTED_HABITAT_AREA,
                         rightField=self.MIN_PATCHSIZE,
                     ),
                     ee.Filter.eq(self.RANGE, self.thresholds["current_range"]),
@@ -159,7 +168,7 @@ class SCLClassification(SCLTask):
                 ),
                 ee.Filter.And(
                     ee.Filter.greaterThanOrEquals(
-                        leftField=self.HABITAT_AREA,
+                        leftField=self.CONNECTED_HABITAT_AREA,
                         rightField=self.MIN_PATCHSIZE,
                     ),
                     ee.Filter.lt(self.RANGE, self.thresholds["current_range"]),
@@ -167,7 +176,7 @@ class SCLClassification(SCLTask):
             ),
             "scl_survey": ee.Filter.And(
                 ee.Filter.greaterThanOrEquals(
-                    leftField=self.HABITAT_AREA, rightField=self.MIN_PATCHSIZE
+                    leftField=self.CONNECTED_HABITAT_AREA, rightField=self.MIN_PATCHSIZE
                 ),
                 ee.Filter.eq(self.RANGE, self.thresholds["current_range"]),
                 ee.Filter.lt(self.PROBABILITY, self.thresholds["probability"]),
@@ -177,28 +186,28 @@ class SCLClassification(SCLTask):
             ),
             "scl_fragment_historical_presence": ee.Filter.And(
                 ee.Filter.lessThan(
-                    leftField=self.HABITAT_AREA, rightField=self.MIN_PATCHSIZE
+                    leftField=self.CONNECTED_HABITAT_AREA, rightField=self.MIN_PATCHSIZE
                 ),
                 ee.Filter.eq(self.RANGE, self.thresholds["current_range"]),
                 ee.Filter.gte(self.PROBABILITY, self.thresholds["probability"]),
             ),
             "scl_fragment_historical_nopresence": ee.Filter.And(
                 ee.Filter.lessThan(
-                    leftField=self.HABITAT_AREA, rightField=self.MIN_PATCHSIZE
+                    leftField=self.CONNECTED_HABITAT_AREA, rightField=self.MIN_PATCHSIZE
                 ),
                 ee.Filter.eq(self.RANGE, self.thresholds["current_range"]),
                 ee.Filter.lt(self.PROBABILITY, self.thresholds["probability"]),
             ),
             "scl_fragment_extirpated_presence": ee.Filter.And(
                 ee.Filter.lessThan(
-                    leftField=self.HABITAT_AREA, rightField=self.MIN_PATCHSIZE
+                    leftField=self.CONNECTED_HABITAT_AREA, rightField=self.MIN_PATCHSIZE
                 ),
                 ee.Filter.lt(self.RANGE, self.thresholds["current_range"]),
                 ee.Filter.gte(self.PROBABILITY, self.thresholds["probability"]),
             ),
             "scl_fragment_extirpated_nopresence": ee.Filter.And(
                 ee.Filter.lessThan(
-                    leftField=self.HABITAT_AREA, rightField=self.MIN_PATCHSIZE
+                    leftField=self.CONNECTED_HABITAT_AREA, rightField=self.MIN_PATCHSIZE
                 ),
                 ee.Filter.lt(self.RANGE, self.thresholds["current_range"]),
                 ee.Filter.lt(self.PROBABILITY, self.thresholds["probability"]),
@@ -207,6 +216,9 @@ class SCLClassification(SCLTask):
 
     def scl_polys_path(self):
         return f"{self.ee_rootdir}/pothab/scl_polys"
+
+    def scl_image_path(self):
+        return f"{self.ee_rootdir}/pothab/scl_image"
 
     def zones_path(self):
         return f"{self.speciesdir}/zones"
@@ -579,6 +591,30 @@ class SCLClassification(SCLTask):
 
         return dissolved_cores, dissolved_fragments
 
+    def reattribute(self, polys):
+        def _round(feat):
+            geom = feat.geometry()
+            eph = feat.get(self.HABITAT_AREA)
+            ceph = feat.get(self.CONNECTED_HABITAT_AREA)
+            return ee.Feature(
+                geom,
+                {
+                    self.HABITAT_AREA: ee.Number(eph).round(),
+                    self.CONNECTED_HABITAT_AREA: ee.Number(ceph).round(),
+                },
+            )
+
+        return (
+            self.scl_image.select(
+                [self.HABITAT_AREA, self.CONNECTED_HABITAT_AREA]
+            ).reduceRegions(
+                collection=polys,
+                reducer=ee.Reducer.sum(),
+                scale=self.scale,
+                crs=self.crs,
+            )
+        ).map(_round)
+
     def calc(self):
         # Temporary: export dataframes needed for probability modeling
         # Make sure cache csvs don't exist locally before running
@@ -636,16 +672,16 @@ class SCLClassification(SCLTask):
         scl_survey, scl_survey_fragment = self.dissolve(
             scl_scored, "scl_survey", "scl_fragment_historical_nopresence"
         )
-        scl_restoration, scl_restoration_fragment = self.dissolve(
+        scl_restoration, scl_rest_frag = self.dissolve(
             scl_scored, "scl_restoration", "scl_fragment_extirpated_presence"
         )
 
-        self.poly_export(scl_species, "scl_species")
-        self.poly_export(scl_species_fragment, "scl_species_fragment")
-        self.poly_export(scl_survey, "scl_survey")
-        self.poly_export(scl_survey_fragment, "scl_survey_fragment")
-        self.poly_export(scl_restoration, "scl_restoration")
-        self.poly_export(scl_restoration_fragment, "scl_restoration_fragment")
+        self.poly_export(self.reattribute(scl_species), "scl_species")
+        self.poly_export(self.reattribute(scl_species_fragment), "scl_species_fragment")
+        self.poly_export(self.reattribute(scl_survey), "scl_survey")
+        self.poly_export(self.reattribute(scl_survey_fragment), "scl_survey_fragment")
+        self.poly_export(self.reattribute(scl_restoration), "scl_restoration")
+        self.poly_export(self.reattribute(scl_rest_frag), "scl_restoration_fragment")
 
     def check_inputs(self):
         super().check_inputs()
