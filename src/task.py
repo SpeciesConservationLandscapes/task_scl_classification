@@ -105,9 +105,7 @@ class SCLClassification(SCLTask):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.use_cache = (
-            kwargs.get("use_cache") or os.environ.get("use_cache") or False
-        )
+        self.use_cache = kwargs.get("use_cache") or os.environ.get("use_cache") or False
 
         try:
             self.OBSDB_HOST = os.environ["OBSDB_HOST"]
@@ -145,15 +143,9 @@ class SCLClassification(SCLTask):
         self.gridcells = ee.FeatureCollection(
             self.inputs["gridcells"]["ee_path"]
         ).filterBounds(self.geofilter)
-        self.countries = ee.FeatureCollection(
-            self.inputs["countries"]["ee_path"]
-        )
-        self.ecoregions = ee.FeatureCollection(
-            self.inputs["ecoregions"]["ee_path"]
-        )
-        self.biomes = self.ecoregions.reduceToImage(
-            ["BIOME_NUM"], ee.Reducer.mode()
-        )
+        self.countries = ee.FeatureCollection(self.inputs["countries"]["ee_path"])
+        self.ecoregions = ee.FeatureCollection(self.inputs["ecoregions"]["ee_path"])
+        self.biomes = self.ecoregions.reduceToImage(["BIOME_NUM"], ee.Reducer.mode())
         self.intersects = ee.Filter.intersects(".geo", None, ".geo")
 
         self.scl_poly_filters = {
@@ -172,12 +164,8 @@ class SCLClassification(SCLTask):
                         rightField=self.MIN_PATCHSIZE,
                     ),
                     ee.Filter.eq(self.RANGE, self.thresholds["current_range"]),
-                    ee.Filter.lt(
-                        self.PROBABILITY, self.thresholds["probability"]
-                    ),
-                    ee.Filter.gte(
-                        self.EFFORT, self.thresholds["survey_effort"]
-                    ),
+                    ee.Filter.lt(self.PROBABILITY, self.thresholds["probability"]),
+                    ee.Filter.gte(self.EFFORT, self.thresholds["survey_effort"]),
                 ),
                 ee.Filter.And(
                     ee.Filter.greaterThanOrEquals(
@@ -252,9 +240,7 @@ class SCLClassification(SCLTask):
         else:
             print("no " + scl_name + " polygons delineated")
 
-    def _download_from_cloudstorage(
-        self, blob_path: str, local_path: str
-    ) -> str:
+    def _download_from_cloudstorage(self, blob_path: str, local_path: str) -> str:
         client = Client()
         bucket = client.get_bucket(self.BUCKET)
         blob = bucket.blob(blob_path)
@@ -291,9 +277,7 @@ class SCLClassification(SCLTask):
         except TypeError:
             return None
 
-    def _cp_storage_to_ee_table(
-        self, blob_uri: str, table_asset_id: str
-    ) -> str:
+    def _cp_storage_to_ee_table(self, blob_uri: str, table_asset_id: str) -> str:
         try:
             cmd = [
                 "/usr/local/bin/earthengine",
@@ -328,9 +312,7 @@ class SCLClassification(SCLTask):
     def _prep_obs_df(self, df):
         # df with point geom if we have one, polygon otherwise, or drop if neither
         obs_df = df[[self.POINT_LOC, self.GRIDCELL_LOC, self.UNIQUE_ID]]
-        obs_df = obs_df.dropna(
-            subset=[self.POINT_LOC, self.GRIDCELL_LOC], how="all"
-        )
+        obs_df = obs_df.dropna(subset=[self.POINT_LOC, self.GRIDCELL_LOC], how="all")
         obs_df = obs_df.assign(geom=obs_df[self.POINT_LOC])
         obs_df["geom"].loc[obs_df["geom"].isna()] = obs_df[self.GRIDCELL_LOC]
         obs_df = obs_df[["geom", self.UNIQUE_ID]]
@@ -356,15 +338,9 @@ class SCLClassification(SCLTask):
             gridcellimage = (
                 ee.ImageCollection(
                     [
-                        gridcells.reduceToImage(
-                            [self.ZONES], ee.Reducer.mode()
-                        ),
-                        gridcells.reduceToImage(
-                            [self.EE_ID_LABEL], ee.Reducer.mode()
-                        ),
-                        gridcells.reduceToImage(
-                            [self.SCLPOLY_ID], ee.Reducer.mode()
-                        ),
+                        gridcells.reduceToImage([self.ZONES], ee.Reducer.mode()),
+                        gridcells.reduceToImage([self.EE_ID_LABEL], ee.Reducer.mode()),
+                        gridcells.reduceToImage([self.SCLPOLY_ID], ee.Reducer.mode()),
                     ]
                 )
                 .toBands()
@@ -377,9 +353,7 @@ class SCLClassification(SCLTask):
                 scale=self.scale,
                 crs=self.crs,
             )
-            master_grid_df = self.fc2df(
-                return_obs_features, self.ZONIFY_DF_COLUMNS
-            )
+            master_grid_df = self.fc2df(return_obs_features, self.ZONIFY_DF_COLUMNS)
 
         df = pd.merge(left=df, right=master_grid_df)
 
@@ -430,9 +404,7 @@ class SCLClassification(SCLTask):
         df.replace(np.inf, 0, inplace=True)
         df.to_csv(f"{tempfile}.csv")
         self._upload_to_cloudstorage(f"{tempfile}.csv", f"{blob}.csv")
-        table_asset_name, table_asset_id = self._prep_asset_id(
-            f"scratch/{tempfile}"
-        )
+        table_asset_name, table_asset_id = self._prep_asset_id(f"scratch/{tempfile}")
         task_id = self._cp_storage_to_ee_table(
             f"gs://{self.BUCKET}/{blob}.csv", table_asset_id
         )
@@ -534,9 +506,7 @@ class SCLClassification(SCLTask):
                     how="left",
                 )
                 self._df_ct[self.CT_DAYS_DETECTED].fillna(0, inplace=True)
-                self._df_ct.rename(
-                    columns={"UniqueID_x": self.UNIQUE_ID}, inplace=True
-                )
+                self._df_ct.rename(columns={"UniqueID_x": self.UNIQUE_ID}, inplace=True)
                 self._df_ct = self._df_ct[
                     [
                         self.UNIQUE_ID,
@@ -618,13 +588,9 @@ class SCLClassification(SCLTask):
             lstype = ee.Algorithms.If(contained, 1, 2)
             return ee.Feature(geom, {"lstype": lstype})
 
-        dissolved_list = (
-            cores.merge(fragments).geometry().dissolve().coordinates()
-        )
+        dissolved_list = cores.merge(fragments).geometry().dissolve().coordinates()
         dissolved_polys = (
-            ee.FeatureCollection(
-                dissolved_list.map(_item_to_classified_feature)
-            )
+            ee.FeatureCollection(dissolved_list.map(_item_to_classified_feature))
             .reduceToImage(["lstype"], ee.Reducer.first())
             .reduceToVectors(
                 geometry=ee.Geometry.Polygon(self.extent),
@@ -709,7 +675,8 @@ class SCLClassification(SCLTask):
                 self.scl_polys,
                 probout,
                 ee.Filter.equals(
-                    leftField=self.SCLPOLY_ID, rightField=self.SCLPOLY_ID,
+                    leftField=self.SCLPOLY_ID,
+                    rightField=self.SCLPOLY_ID,
                 ),
             )
         ).map(_flatten_fields)
@@ -725,17 +692,11 @@ class SCLClassification(SCLTask):
         )
 
         self.poly_export(self.reattribute(scl_species), "scl_species")
-        self.poly_export(
-            self.reattribute(scl_species_fragment), "scl_species_fragment"
-        )
+        self.poly_export(self.reattribute(scl_species_fragment), "scl_species_fragment")
         self.poly_export(self.reattribute(scl_survey), "scl_survey")
-        self.poly_export(
-            self.reattribute(scl_survey_fragment), "scl_survey_fragment"
-        )
+        self.poly_export(self.reattribute(scl_survey_fragment), "scl_survey_fragment")
         self.poly_export(self.reattribute(scl_restoration), "scl_restoration")
-        self.poly_export(
-            self.reattribute(scl_rest_frag), "scl_restoration_fragment"
-        )
+        self.poly_export(self.reattribute(scl_rest_frag), "scl_restoration_fragment")
 
     def check_inputs(self):
         super().check_inputs()
