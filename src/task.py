@@ -151,8 +151,7 @@ class SCLClassification(SCLTask):
         self.scl_poly_filters = {
             "scl_species": ee.Filter.And(
                 ee.Filter.greaterThanOrEquals(
-                    leftField=self.CONNECTED_HABITAT_AREA,
-                    rightField=self.MIN_PATCHSIZE,
+                    leftField=self.CONNECTED_HABITAT_AREA, rightField=self.MIN_PATCHSIZE
                 ),
                 ee.Filter.eq(self.RANGE, self.thresholds["current_range"]),
                 ee.Filter.gte(self.PROBABILITY, self.thresholds["probability"]),
@@ -177,8 +176,7 @@ class SCLClassification(SCLTask):
             ),
             "scl_survey": ee.Filter.And(
                 ee.Filter.greaterThanOrEquals(
-                    leftField=self.CONNECTED_HABITAT_AREA,
-                    rightField=self.MIN_PATCHSIZE,
+                    leftField=self.CONNECTED_HABITAT_AREA, rightField=self.MIN_PATCHSIZE
                 ),
                 ee.Filter.eq(self.RANGE, self.thresholds["current_range"]),
                 ee.Filter.lt(self.PROBABILITY, self.thresholds["probability"]),
@@ -188,32 +186,28 @@ class SCLClassification(SCLTask):
             ),
             "scl_fragment_historical_presence": ee.Filter.And(
                 ee.Filter.lessThan(
-                    leftField=self.CONNECTED_HABITAT_AREA,
-                    rightField=self.MIN_PATCHSIZE,
+                    leftField=self.CONNECTED_HABITAT_AREA, rightField=self.MIN_PATCHSIZE
                 ),
                 ee.Filter.eq(self.RANGE, self.thresholds["current_range"]),
                 ee.Filter.gte(self.PROBABILITY, self.thresholds["probability"]),
             ),
             "scl_fragment_historical_nopresence": ee.Filter.And(
                 ee.Filter.lessThan(
-                    leftField=self.CONNECTED_HABITAT_AREA,
-                    rightField=self.MIN_PATCHSIZE,
+                    leftField=self.CONNECTED_HABITAT_AREA, rightField=self.MIN_PATCHSIZE
                 ),
                 ee.Filter.eq(self.RANGE, self.thresholds["current_range"]),
                 ee.Filter.lt(self.PROBABILITY, self.thresholds["probability"]),
             ),
             "scl_fragment_extirpated_presence": ee.Filter.And(
                 ee.Filter.lessThan(
-                    leftField=self.CONNECTED_HABITAT_AREA,
-                    rightField=self.MIN_PATCHSIZE,
+                    leftField=self.CONNECTED_HABITAT_AREA, rightField=self.MIN_PATCHSIZE
                 ),
                 ee.Filter.lt(self.RANGE, self.thresholds["current_range"]),
                 ee.Filter.gte(self.PROBABILITY, self.thresholds["probability"]),
             ),
             "scl_fragment_extirpated_nopresence": ee.Filter.And(
                 ee.Filter.lessThan(
-                    leftField=self.CONNECTED_HABITAT_AREA,
-                    rightField=self.MIN_PATCHSIZE,
+                    leftField=self.CONNECTED_HABITAT_AREA, rightField=self.MIN_PATCHSIZE
                 ),
                 ee.Filter.lt(self.RANGE, self.thresholds["current_range"]),
                 ee.Filter.lt(self.PROBABILITY, self.thresholds["probability"]),
@@ -451,9 +445,7 @@ class SCLClassification(SCLTask):
             _csvpath = "cameratrap.csv"
             if self.use_cache and Path(_csvpath).is_file():
                 self._df_ct = pd.read_csv(
-                    _csvpath,
-                    encoding="utf-8",
-                    index_col="CameraTrapDeploymentID",
+                    _csvpath, encoding="utf-8", index_col="CameraTrapDeploymentID"
                 )
             else:
                 query = (
