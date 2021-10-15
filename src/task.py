@@ -227,12 +227,8 @@ class SCLClassification(SCLTask):
         return f"{self.speciesdir}/gridcells"
 
     def poly_export(self, polys, scl_name):
-        size_test = polys.size().gt(0).getInfo()
-        path = "pothab/" + scl_name
-        if size_test:
-            self.export_fc_ee(polys, path)
-        else:
-            print("no " + scl_name + " polygons delineated")
+        path = f"pothab/{scl_name}"
+        self.export_fc_ee(polys, path)
 
     def _download_from_cloudstorage(self, blob_path: str, local_path: str) -> str:
         client = Client()
@@ -578,7 +574,7 @@ class SCLClassification(SCLTask):
             geom = ee.Geometry.Polygon(item)
             contained = cores.geometry().intersects(geom)
             lstype = ee.Algorithms.If(contained, 1, 2)
-            return ee.Feature(geom, {"lstype": lstype})
+            return ee.Feature(geom.buffer(-1), {"lstype": lstype})
 
         dissolved_list = cores.merge(fragments).geometry().dissolve().coordinates()
         dissolved_polys = (
@@ -586,8 +582,8 @@ class SCLClassification(SCLTask):
             .reduceToImage(["lstype"], ee.Reducer.first())
             .reduceToVectors(
                 geometry=ee.Geometry.Polygon(self.extent),
-                scale=10,  # TODO: determine a scale/crsTransform/crs that can carry through and maintain grid integrity
                 crs=self.crs,
+                scale=self.scale,
                 labelProperty="lstype",
                 maxPixels=self.ee_max_pixels,
             )
@@ -666,10 +662,7 @@ class SCLClassification(SCLTask):
             ee.Join.inner("primary", "secondary").apply(
                 self.scl_polys,
                 probout,
-                ee.Filter.equals(
-                    leftField=self.SCLPOLY_ID,
-                    rightField=self.SCLPOLY_ID,
-                ),
+                ee.Filter.equals(leftField=self.SCLPOLY_ID, rightField=self.SCLPOLY_ID),
             )
         ).map(_flatten_fields)
 
