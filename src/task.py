@@ -574,12 +574,23 @@ class SCLClassification(SCLTask):
             geom = ee.Geometry.Polygon(item)
             contained = cores.geometry().intersects(geom)
             lstype = ee.Algorithms.If(contained, 1, 2)
-            return ee.Feature(geom.buffer(-1), {"lstype": lstype})
+            return ee.Feature(geom, {"lstype": lstype})
 
         dissolved_list = cores.merge(fragments).geometry().dissolve().coordinates()
         dissolved_polys = (
             ee.FeatureCollection(dissolved_list.map(_item_to_classified_feature))
             .reduceToImage(["lstype"], ee.Reducer.first())
+            .setDefaultProjection(
+                scale=450,
+                crs=self.crs,  # this could probably be anything <500
+            )
+            .unmask(0)
+            .reduceResolution(ee.Reducer.min())
+            .reproject(
+                scale=self.scale,
+                crs=self.crs,
+            )
+            .selfMask()
             .reduceToVectors(
                 geometry=ee.Geometry.Polygon(self.extent),
                 crs=self.crs,
