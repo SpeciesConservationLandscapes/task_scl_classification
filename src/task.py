@@ -580,7 +580,7 @@ class SCLClassification(SCLTask):
         dissolved_polys = (
             ee.FeatureCollection(dissolved_list.map(_item_to_classified_feature))
             .reduceToImage(["lstype"], ee.Reducer.first())
-            .setDeafaultProjection(
+            .setDefaultProjection(
                 scale=450, crs=self.crs,  # this could probably be anything <500
             )
             .unmask(0)
