@@ -13,7 +13,7 @@ from typing import Optional, Union
 from google.cloud.storage import Client
 from google.cloud.exceptions import NotFound
 from pathlib import Path
-from task_base import SCLTask
+from task_base import SCLTask, EETaskError
 
 
 class ConversionException(Exception):
@@ -726,4 +726,14 @@ if __name__ == "__main__":
     )
     options = parser.parse_args()
     sclclassification_task = SCLClassification(**vars(options))
-    sclclassification_task.run()
+
+    try:
+        sclclassification_task.run()
+    except EETaskError as e:
+        statuses = list(e.ee_statuses.values())
+        if statuses:
+            message = statuses[0]["error_message"]
+            if message.lower() == "table is empty.":
+                sclclassification_task.status = sclclassification_task.RUNNING
+            else:
+                raise e
