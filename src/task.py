@@ -309,8 +309,36 @@ class SCLClassification(SCLTask):
         obs_df.set_index(self.UNIQUE_ID, inplace=True)
         return obs_df
 
+    def inner_join(self, primary, secondary, primary_field, secondary_field):
+        def _flatten_fields(feat):
+            primary_feature = ee.Feature(feat.get("primary"))
+            secondary_feature = ee.Feature(feat.get("secondary"))
+            return_feat = ee.Feature(
+                primary_feature.geometry(),
+                primary_feature.toDictionary().combine(
+                    secondary_feature.toDictionary()
+                ),
+            )
+            return return_feat
+
+        return (
+            ee.Join.inner("primary", "secondary").apply(
+                primary,
+                secondary,
+                ee.Filter.equals(leftField=primary_field, rightField=secondary_field),
+            )
+        ).map(_flatten_fields)
+
     def zonify(self, df):
         master_grid_df = pd.DataFrame(columns=self.ZONIFY_DF_COLUMNS)
+
+        def _max_frequency(feat):
+            hist = ee.Dictionary(feat.get(self.MASTER_CELL))
+            vals = hist.values()
+            max = vals.reduce(ee.Reducer.max())
+            index = vals.indexOf(max)
+            max_key = ee.Number.parse(hist.keys().get(index)).toLong()
+            return feat.set(self.MASTER_CELL, max_key)
 
         obs_df = self._prep_obs_df(df)
         if not obs_df.empty:
@@ -330,19 +358,26 @@ class SCLClassification(SCLTask):
                     [
                         gridcells.reduceToImage([self.ZONES], ee.Reducer.mode()),
                         gridcells.reduceToImage([self.EE_ID_LABEL], ee.Reducer.mode()),
-                        gridcells.reduceToImage([self.SCLPOLY_ID], ee.Reducer.mode()),
                     ]
                 )
                 .toBands()
-                .rename([self.MASTER_GRID, self.MASTER_CELL, self.SCLPOLY_ID])
+                .rename([self.MASTER_GRID, self.MASTER_CELL])
             )
 
-            return_obs_features = gridcellimage.reduceRegions(
+            gridded_obs_features = gridcellimage.reduceRegions(
                 collection=obs_features,
-                reducer=ee.Reducer.mode(),
+                reducer=ee.Reducer.mode()
+                .forEach([self.MASTER_GRID])
+                .combine(ee.Reducer.frequencyHistogram().forEach([self.MASTER_CELL])),
                 scale=self.scale,
                 crs=self.crs,
+            ).map(_max_frequency)
+
+            return_obs_features = self.inner_join(
+                gridded_obs_features, gridcells, self.MASTER_CELL, self.EE_ID_LABEL
             )
+
+            self.export_fc_ee(return_obs_features, "scratch/signsurvey_211029")
             master_grid_df = self.fc2df(return_obs_features, self.ZONIFY_DF_COLUMNS)
 
         df = pd.merge(left=df, right=master_grid_df)
@@ -658,24 +693,9 @@ class SCLClassification(SCLTask):
             ),
         )
 
-        def _flatten_fields(feat):
-            primary_feature = ee.Feature(feat.get("primary"))
-            secondary_feature = ee.Feature(feat.get("secondary"))
-            return_feat = ee.Feature(
-                primary_feature.geometry(),
-                primary_feature.toDictionary().combine(
-                    secondary_feature.toDictionary()
-                ),
-            )
-            return return_feat
-
-        scl_scored = (
-            ee.Join.inner("primary", "secondary").apply(
-                self.scl_polys,
-                probout,
-                ee.Filter.equals(leftField=self.SCLPOLY_ID, rightField=self.SCLPOLY_ID),
-            )
-        ).map(_flatten_fields)
+        scl_scored = self.inner_join(
+            self.scl_polys, probout, self.SCLPOLY_ID, self.SCLPOLY_ID
+        )
 
         scl_species, scl_species_fragment = self.dissolve(
             scl_scored, "scl_species", "scl_fragment_historical_presence"
