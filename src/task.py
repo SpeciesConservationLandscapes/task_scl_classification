@@ -377,7 +377,7 @@ class SCLClassification(SCLTask):
                 gridded_obs_features, gridcells, self.MASTER_CELL, self.EE_ID_LABEL
             )
 
-            self.export_fc_ee(return_obs_features, "scratch/signsurvey_211029")
+            # self.export_fc_ee(return_obs_features, "scratch/signsurvey_211029")
             master_grid_df = self.fc2df(return_obs_features, self.ZONIFY_DF_COLUMNS)
 
         df = pd.merge(left=df, right=master_grid_df)
