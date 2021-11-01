@@ -96,8 +96,8 @@ class SCLClassification(SCLTask):
     }
     thresholds = {
         "current_range": 2,
-        "probability": 0.99,
-        "survey_effort": 0.6,
+        "probability": 99,
+        "survey_effort": 60,
     }
 
     def scenario_habitat(self):
@@ -377,7 +377,7 @@ class SCLClassification(SCLTask):
                 gridded_obs_features, gridcells, self.MASTER_CELL, self.EE_ID_LABEL
             )
 
-            # self.export_fc_ee(return_obs_features, "scratch/signsurvey_211029")
+            self.export_fc_ee(return_obs_features, "scratch/adhoc_211101b")
             master_grid_df = self.fc2df(return_obs_features, self.ZONIFY_DF_COLUMNS)
 
         df = pd.merge(left=df, right=master_grid_df)
@@ -454,8 +454,13 @@ class SCLClassification(SCLTask):
                     f"EndObservationDate AS {self.DATE}, "
                     f"{self.DENSITY} "
                     f"FROM dbo.vw_CI_AdHocObservation "
-                    f"WHERE DATEDIFF(YEAR, EndObservationDate, '{self.taskdate}') <= {self.inputs['obs_adhoc']['maxage']} "
-                    f"AND EndObservationDate <= Cast('{self.taskdate}' AS datetime) "
+                    f"WHERE ("
+                    f"  DATEDIFF(YEAR, EndObservationDate, '{self.taskdate}') <= {self.inputs['obs_adhoc']['maxage']}"
+                    f"  AND EndObservationDate <= Cast('{self.taskdate}' AS datetime)"
+                    f") OR ("
+                    f"  DATEDIFF(YEAR, StartObservationDate, '{self.taskdate}') <= {self.inputs['obs_adhoc']['maxage']}"
+                    f"  AND StartObservationDate <= Cast('{self.taskdate}' AS datetime)"
+                    f")"
                 )
                 self._df_adhoc = self._get_df(query)
                 print("zonify adhoc")
@@ -487,8 +492,13 @@ class SCLClassification(SCLTask):
                     f"PickupDatetime AS {self.DATE}, "
                     f"{self.CT_DAYS_OPERATING} "
                     f"FROM dbo.vw_CI_CameraTrapDeployment "
-                    f"WHERE DATEDIFF(YEAR, PickupDatetime, '{self.taskdate}') <= {self.inputs['obs_ct']['maxage']} "
-                    f"AND PickupDatetime <= Cast('{self.taskdate}' AS datetime) "
+                    f"WHERE ("
+                    f"  DATEDIFF(YEAR, PickupDatetime, '{self.taskdate}') <= {self.inputs['obs_ct']['maxage']}"
+                    f"  AND PickupDatetime <= Cast('{self.taskdate}' AS datetime)"
+                    f") OR ("
+                    f"  DATEDIFF(YEAR, DeploymentDatetime, '{self.taskdate}') <= {self.inputs['obs_ct']['maxage']}"
+                    f"  AND DeploymentDatetime <= Cast('{self.taskdate}' AS datetime)"
+                    f")"
                 )
                 df_ct_dep = self._get_df(query)
                 print("zonify camera trap deployments")
@@ -667,24 +677,24 @@ class SCLClassification(SCLTask):
     def calc(self):
         # Temporary: export dataframes needed for probability modeling
         # Make sure cache csvs don't exist locally before running
-        if self.use_cache:
-            prob_columns = [
-                self.SCLPOLY_ID,
-                self.BIOME,
-                self.COUNTRY,
-            ]
-
-            # for join debugging
-            self.export_fc_ee(self.scl_polys, "assigned_scl_polys")
-
-            df_scl_polys = self.fc2df(self.scl_polys, columns=prob_columns)
-            df_scl_polys.set_index(self.SCLPOLY_ID, inplace=True)
-            print(df_scl_polys)
-            df_scl_polys.to_csv("scl_polys.csv")
-
-        print(self.df_adhoc)
-        print(self.df_cameratrap)
-        print(self.df_signsurvey)
+        # if self.use_cache:
+        #     prob_columns = [
+        #         self.SCLPOLY_ID,
+        #         self.BIOME,
+        #         self.COUNTRY,
+        #     ]
+        #
+        #     # for join debugging
+        #     self.export_fc_ee(self.scl_polys, "assigned_scl_polys")
+        #
+        #     df_scl_polys = self.fc2df(self.scl_polys, columns=prob_columns)
+        #     df_scl_polys.set_index(self.SCLPOLY_ID, inplace=True)
+        #     print(df_scl_polys)
+        #     df_scl_polys.to_csv("scl_polys.csv")
+        #
+        # print(self.df_adhoc)
+        # print(self.df_cameratrap)
+        # print(self.df_signsurvey)
 
         # Temporary: ingest probability model output csv, join to polys, and do classification
         probout = self.df2fc(
@@ -696,6 +706,7 @@ class SCLClassification(SCLTask):
         scl_scored = self.inner_join(
             self.scl_polys, probout, self.SCLPOLY_ID, self.SCLPOLY_ID
         )
+        self.export_fc_ee(scl_scored, "scl_scored")
 
         scl_species, scl_species_fragment = self.dissolve(
             scl_scored, "scl_species", "scl_fragment_historical_presence"
