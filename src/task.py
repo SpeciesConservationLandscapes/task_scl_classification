@@ -329,7 +329,7 @@ class SCLClassification(SCLTask):
             )
         ).map(_flatten_fields)
 
-    def zonify(self, df):
+    def zonify(self, df, savefc=None):
         master_grid_df = pd.DataFrame(columns=self.ZONIFY_DF_COLUMNS)
 
         def _max_frequency(feat):
@@ -377,7 +377,8 @@ class SCLClassification(SCLTask):
                 gridded_obs_features, gridcells, self.MASTER_CELL, self.EE_ID_LABEL
             )
 
-            self.export_fc_ee(return_obs_features, "scratch/adhoc_211101b")
+            if savefc:
+                self.export_fc_ee(return_obs_features, savefc)
             master_grid_df = self.fc2df(return_obs_features, self.ZONIFY_DF_COLUMNS)
 
         df = pd.merge(left=df, right=master_grid_df)
@@ -465,6 +466,7 @@ class SCLClassification(SCLTask):
                 self._df_adhoc = self._get_df(query)
                 print("zonify adhoc")
                 self._df_adhoc = self.zonify(self._df_adhoc)
+                # self._df_adhoc = self.zonify(self._df_adhoc, "scratch/adhoc")
                 self._df_adhoc = self._df_adhoc.drop(
                     [self.POINT_LOC, self.GRIDCELL_LOC], axis=1
                 )
@@ -503,6 +505,7 @@ class SCLClassification(SCLTask):
                 df_ct_dep = self._get_df(query)
                 print("zonify camera trap deployments")
                 df_ct_dep = self.zonify(df_ct_dep)
+                # df_ct_dep = self.zonify(df_ct_dep, "scratch/ct")
                 df_ct_dep.set_index("CameraTrapDeploymentID", inplace=True)
 
                 query = (
@@ -580,6 +583,7 @@ class SCLClassification(SCLTask):
                 self._df_ss = self._get_df(query)
                 print("zonify sign survey")
                 self._df_ss = self.zonify(self._df_ss)
+                # self._df_ss = self.zonify(self._df_ss, "scratch/ss")
                 self._df_ss = self._df_ss.drop(
                     [self.POINT_LOC, self.GRIDCELL_LOC], axis=1
                 )
@@ -677,24 +681,24 @@ class SCLClassification(SCLTask):
     def calc(self):
         # Temporary: export dataframes needed for probability modeling
         # Make sure cache csvs don't exist locally before running
-        # if self.use_cache:
-        #     prob_columns = [
-        #         self.SCLPOLY_ID,
-        #         self.BIOME,
-        #         self.COUNTRY,
-        #     ]
-        #
-        #     # for join debugging
-        #     self.export_fc_ee(self.scl_polys, "assigned_scl_polys")
-        #
-        #     df_scl_polys = self.fc2df(self.scl_polys, columns=prob_columns)
-        #     df_scl_polys.set_index(self.SCLPOLY_ID, inplace=True)
-        #     print(df_scl_polys)
-        #     df_scl_polys.to_csv("scl_polys.csv")
-        #
-        # print(self.df_adhoc)
-        # print(self.df_cameratrap)
-        # print(self.df_signsurvey)
+        if self.use_cache:
+            prob_columns = [
+                self.SCLPOLY_ID,
+                self.BIOME,
+                self.COUNTRY,
+            ]
+
+            # for join debugging
+            self.export_fc_ee(self.scl_polys, "assigned_scl_polys")
+
+            df_scl_polys = self.fc2df(self.scl_polys, columns=prob_columns)
+            df_scl_polys.set_index(self.SCLPOLY_ID, inplace=True)
+            print(df_scl_polys)
+            df_scl_polys.to_csv("scl_polys.csv")
+
+        print(self.df_adhoc)
+        print(self.df_cameratrap)
+        print(self.df_signsurvey)
 
         # Temporary: ingest probability model output csv, join to polys, and do classification
         probout = self.df2fc(
@@ -706,7 +710,7 @@ class SCLClassification(SCLTask):
         scl_scored = self.inner_join(
             self.scl_polys, probout, self.SCLPOLY_ID, self.SCLPOLY_ID
         )
-        self.export_fc_ee(scl_scored, "scl_scored")
+        # self.export_fc_ee(scl_scored, "scl_scored")
 
         scl_species, scl_species_fragment = self.dissolve(
             scl_scored, "scl_species", "scl_fragment_historical_presence"
