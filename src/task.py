@@ -96,8 +96,8 @@ class SCLClassification(SCLTask):
     }
     thresholds = {
         "current_range": 2,
-        "probability": 0.99,
-        "survey_effort": 0.6,
+        "probability": 99,
+        "survey_effort": 60,
     }
 
     def scenario_habitat(self):
@@ -329,7 +329,7 @@ class SCLClassification(SCLTask):
             )
         ).map(_flatten_fields)
 
-    def zonify(self, df):
+    def zonify(self, df, savefc=None):
         master_grid_df = pd.DataFrame(columns=self.ZONIFY_DF_COLUMNS)
 
         def _max_frequency(feat):
@@ -377,7 +377,8 @@ class SCLClassification(SCLTask):
                 gridded_obs_features, gridcells, self.MASTER_CELL, self.EE_ID_LABEL
             )
 
-            # self.export_fc_ee(return_obs_features, "scratch/signsurvey_211029")
+            if savefc:
+                self.export_fc_ee(return_obs_features, savefc)
             master_grid_df = self.fc2df(return_obs_features, self.ZONIFY_DF_COLUMNS)
 
         df = pd.merge(left=df, right=master_grid_df)
@@ -454,12 +455,18 @@ class SCLClassification(SCLTask):
                     f"EndObservationDate AS {self.DATE}, "
                     f"{self.DENSITY} "
                     f"FROM dbo.vw_CI_AdHocObservation "
-                    f"WHERE DATEDIFF(YEAR, EndObservationDate, '{self.taskdate}') <= {self.inputs['obs_adhoc']['maxage']} "
-                    f"AND EndObservationDate <= Cast('{self.taskdate}' AS datetime) "
+                    f"WHERE ("
+                    f"  DATEDIFF(YEAR, EndObservationDate, '{self.taskdate}') <= {self.inputs['obs_adhoc']['maxage']}"
+                    f"  AND EndObservationDate <= Cast('{self.taskdate}' AS datetime)"
+                    f") OR ("
+                    f"  DATEDIFF(YEAR, StartObservationDate, '{self.taskdate}') <= {self.inputs['obs_adhoc']['maxage']}"
+                    f"  AND StartObservationDate <= Cast('{self.taskdate}' AS datetime)"
+                    f")"
                 )
                 self._df_adhoc = self._get_df(query)
                 print("zonify adhoc")
                 self._df_adhoc = self.zonify(self._df_adhoc)
+                # self._df_adhoc = self.zonify(self._df_adhoc, "scratch/adhoc")
                 self._df_adhoc = self._df_adhoc.drop(
                     [self.POINT_LOC, self.GRIDCELL_LOC], axis=1
                 )
@@ -487,12 +494,18 @@ class SCLClassification(SCLTask):
                     f"PickupDatetime AS {self.DATE}, "
                     f"{self.CT_DAYS_OPERATING} "
                     f"FROM dbo.vw_CI_CameraTrapDeployment "
-                    f"WHERE DATEDIFF(YEAR, PickupDatetime, '{self.taskdate}') <= {self.inputs['obs_ct']['maxage']} "
-                    f"AND PickupDatetime <= Cast('{self.taskdate}' AS datetime) "
+                    f"WHERE ("
+                    f"  DATEDIFF(YEAR, PickupDatetime, '{self.taskdate}') <= {self.inputs['obs_ct']['maxage']}"
+                    f"  AND PickupDatetime <= Cast('{self.taskdate}' AS datetime)"
+                    f") OR ("
+                    f"  DATEDIFF(YEAR, DeploymentDatetime, '{self.taskdate}') <= {self.inputs['obs_ct']['maxage']}"
+                    f"  AND DeploymentDatetime <= Cast('{self.taskdate}' AS datetime)"
+                    f")"
                 )
                 df_ct_dep = self._get_df(query)
                 print("zonify camera trap deployments")
                 df_ct_dep = self.zonify(df_ct_dep)
+                # df_ct_dep = self.zonify(df_ct_dep, "scratch/ct")
                 df_ct_dep.set_index("CameraTrapDeploymentID", inplace=True)
 
                 query = (
@@ -570,6 +583,7 @@ class SCLClassification(SCLTask):
                 self._df_ss = self._get_df(query)
                 print("zonify sign survey")
                 self._df_ss = self.zonify(self._df_ss)
+                # self._df_ss = self.zonify(self._df_ss, "scratch/ss")
                 self._df_ss = self._df_ss.drop(
                     [self.POINT_LOC, self.GRIDCELL_LOC], axis=1
                 )
@@ -696,6 +710,7 @@ class SCLClassification(SCLTask):
         scl_scored = self.inner_join(
             self.scl_polys, probout, self.SCLPOLY_ID, self.SCLPOLY_ID
         )
+        # self.export_fc_ee(scl_scored, "scl_scored")
 
         scl_species, scl_species_fragment = self.dissolve(
             scl_scored, "scl_species", "scl_fragment_historical_presence"
