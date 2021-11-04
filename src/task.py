@@ -6,7 +6,6 @@ import subprocess
 import numpy as np
 import pandas as pd
 import pyodbc
-import time
 import uuid
 from typing import Optional, Union
 
@@ -14,6 +13,8 @@ from google.cloud.storage import Client
 from google.cloud.exceptions import NotFound
 from pathlib import Path
 from task_base import SCLTask, EETaskError
+from constants import *
+from probability.probability_panthera_tigris import assign_probabilities
 
 
 class ConversionException(Exception):
@@ -22,42 +23,6 @@ class ConversionException(Exception):
 
 # noinspection PyTypeChecker
 class SCLClassification(SCLTask):
-    BUCKET = "scl-pipeline"
-    ZONES = "Zone"  # Attribute used by both zones and gridcells
-    BIOME = "biome"
-    COUNTRY = "country"
-
-    # data labels coming from sql
-    DATE = "datestamp"  # consistent label for dates coming from different obs queries
-    DENSITY = "Density"
-    GRIDCELL_LOC = "GridCellLocation"
-    POINT_LOC = "PointLocation"
-    UNIQUE_ID = "UniqueID"
-    CT_DAYS_DETECTED = "detections"
-    CT_DAYS_OPERATING = "Days"
-    SS_SEGMENTS_DETECTED = "detections"
-    SS_SEGMENTS_SURVEYED = "NumberOfReplicatesSurveyed"
-
-    # labels used in zonify()
-    EE_ID_LABEL = "id"
-    MASTER_GRID = "mastergrid"
-    MASTER_CELL = "mastergridcell"
-    SCLPOLY_ID = "poly_id"
-    ZONIFY_DF_COLUMNS = [
-        UNIQUE_ID,
-        MASTER_GRID,
-        MASTER_CELL,
-        SCLPOLY_ID,
-    ]
-
-    # labels used in classification
-    HABITAT_AREA = "eff_pot_hab_area"
-    CONNECTED_HABITAT_AREA = "connected_eff_pot_hab_area"
-    MIN_PATCHSIZE = "min_patch_size"
-    PROBABILITY = "phi_3"
-    EFFORT = "eff_3"
-    RANGE = "range"
-
     google_creds_path = "/.google_creds"
     inputs = {
         "obs_adhoc": {"maxage": 5},
@@ -151,66 +116,58 @@ class SCLClassification(SCLTask):
         self.scl_poly_filters = {
             "scl_species": ee.Filter.And(
                 ee.Filter.greaterThanOrEquals(
-                    leftField=self.CONNECTED_HABITAT_AREA, rightField=self.MIN_PATCHSIZE
+                    leftField=CONNECTED_HABITAT_AREA, rightField=MIN_PATCHSIZE
                 ),
-                ee.Filter.eq(self.RANGE, self.thresholds["current_range"]),
-                ee.Filter.gte(self.PROBABILITY, self.thresholds["probability"]),
+                ee.Filter.eq(RANGE, self.thresholds["current_range"]),
+                ee.Filter.gte(PROBABILITY, self.thresholds["probability"]),
             ),
             "scl_restoration": ee.Filter.Or(
                 ee.Filter.And(
                     ee.Filter.greaterThanOrEquals(
-                        leftField=self.CONNECTED_HABITAT_AREA,
-                        rightField=self.MIN_PATCHSIZE,
+                        leftField=CONNECTED_HABITAT_AREA,
+                        rightField=MIN_PATCHSIZE,
                     ),
-                    ee.Filter.eq(self.RANGE, self.thresholds["current_range"]),
-                    ee.Filter.lt(self.PROBABILITY, self.thresholds["probability"]),
-                    ee.Filter.gte(self.EFFORT, self.thresholds["survey_effort"]),
+                    ee.Filter.eq(RANGE, self.thresholds["current_range"]),
+                    ee.Filter.lt(PROBABILITY, self.thresholds["probability"]),
+                    ee.Filter.gte(EFFORT, self.thresholds["survey_effort"]),
                 ),
                 ee.Filter.And(
                     ee.Filter.greaterThanOrEquals(
-                        leftField=self.CONNECTED_HABITAT_AREA,
-                        rightField=self.MIN_PATCHSIZE,
+                        leftField=CONNECTED_HABITAT_AREA,
+                        rightField=MIN_PATCHSIZE,
                     ),
-                    ee.Filter.lt(self.RANGE, self.thresholds["current_range"]),
+                    ee.Filter.lt(RANGE, self.thresholds["current_range"]),
                 ),
             ),
             "scl_survey": ee.Filter.And(
                 ee.Filter.greaterThanOrEquals(
-                    leftField=self.CONNECTED_HABITAT_AREA, rightField=self.MIN_PATCHSIZE
+                    leftField=CONNECTED_HABITAT_AREA, rightField=MIN_PATCHSIZE
                 ),
-                ee.Filter.eq(self.RANGE, self.thresholds["current_range"]),
-                ee.Filter.lt(self.PROBABILITY, self.thresholds["probability"]),
+                ee.Filter.eq(RANGE, self.thresholds["current_range"]),
+                ee.Filter.lt(PROBABILITY, self.thresholds["probability"]),
                 ee.Filter.lt(  # you haven't put in enough effort to lower the probability a critter is present
-                    self.EFFORT, self.thresholds["survey_effort"]
+                    EFFORT, self.thresholds["survey_effort"]
                 ),
             ),
             "scl_fragment_historical_presence": ee.Filter.And(
                 ee.Filter.lessThan(
-                    leftField=self.CONNECTED_HABITAT_AREA, rightField=self.MIN_PATCHSIZE
+                    leftField=CONNECTED_HABITAT_AREA, rightField=MIN_PATCHSIZE
                 ),
-                ee.Filter.eq(self.RANGE, self.thresholds["current_range"]),
-                ee.Filter.gte(self.PROBABILITY, self.thresholds["probability"]),
+                ee.Filter.eq(RANGE, self.thresholds["current_range"]),
+                ee.Filter.gte(PROBABILITY, self.thresholds["probability"]),
             ),
             "scl_fragment_historical_nopresence": ee.Filter.And(
                 ee.Filter.lessThan(
-                    leftField=self.CONNECTED_HABITAT_AREA, rightField=self.MIN_PATCHSIZE
+                    leftField=CONNECTED_HABITAT_AREA, rightField=MIN_PATCHSIZE
                 ),
-                ee.Filter.eq(self.RANGE, self.thresholds["current_range"]),
-                ee.Filter.lt(self.PROBABILITY, self.thresholds["probability"]),
+                ee.Filter.eq(RANGE, self.thresholds["current_range"]),
+                ee.Filter.lt(PROBABILITY, self.thresholds["probability"]),
             ),
-            "scl_fragment_extirpated_presence": ee.Filter.And(
+            "scl_fragment_extirpated": ee.Filter.And(
                 ee.Filter.lessThan(
-                    leftField=self.CONNECTED_HABITAT_AREA, rightField=self.MIN_PATCHSIZE
+                    leftField=CONNECTED_HABITAT_AREA, rightField=MIN_PATCHSIZE
                 ),
-                ee.Filter.lt(self.RANGE, self.thresholds["current_range"]),
-                ee.Filter.gte(self.PROBABILITY, self.thresholds["probability"]),
-            ),
-            "scl_fragment_extirpated_nopresence": ee.Filter.And(
-                ee.Filter.lessThan(
-                    leftField=self.CONNECTED_HABITAT_AREA, rightField=self.MIN_PATCHSIZE
-                ),
-                ee.Filter.lt(self.RANGE, self.thresholds["current_range"]),
-                ee.Filter.lt(self.PROBABILITY, self.thresholds["probability"]),
+                ee.Filter.lt(RANGE, self.thresholds["current_range"]),
             ),
         }
 
@@ -232,21 +189,21 @@ class SCLClassification(SCLTask):
 
     def _download_from_cloudstorage(self, blob_path: str, local_path: str) -> str:
         client = Client()
-        bucket = client.get_bucket(self.BUCKET)
+        bucket = client.get_bucket(BUCKET)
         blob = bucket.blob(blob_path)
         blob.download_to_filename(local_path)
         return local_path
 
     def _upload_to_cloudstorage(self, local_path: str, blob_path: str) -> str:
         client = Client()
-        bucket = client.bucket(self.BUCKET)
+        bucket = client.bucket(BUCKET)
         blob = bucket.blob(blob_path)
         blob.upload_from_filename(local_path, timeout=3600)
         return blob_path
 
     def _remove_from_cloudstorage(self, blob_path: str):
         client = Client()
-        bucket = client.bucket(self.BUCKET)
+        bucket = client.bucket(BUCKET)
         try:  # don't fail entire task if this fails
             bucket.delete_blob(blob_path)
         except NotFound:
@@ -301,12 +258,12 @@ class SCLClassification(SCLTask):
 
     def _prep_obs_df(self, df):
         # df with point geom if we have one, polygon otherwise, or drop if neither
-        obs_df = df[[self.POINT_LOC, self.GRIDCELL_LOC, self.UNIQUE_ID]]
-        obs_df = obs_df.dropna(subset=[self.POINT_LOC, self.GRIDCELL_LOC], how="all")
-        obs_df = obs_df.assign(geom=obs_df[self.POINT_LOC])
-        obs_df["geom"].loc[obs_df["geom"].isna()] = obs_df[self.GRIDCELL_LOC]
-        obs_df = obs_df[["geom", self.UNIQUE_ID]]
-        obs_df.set_index(self.UNIQUE_ID, inplace=True)
+        obs_df = df[[POINT_LOC, GRIDCELL_LOC, UNIQUE_ID]]
+        obs_df = obs_df.dropna(subset=[POINT_LOC, GRIDCELL_LOC], how="all")
+        obs_df = obs_df.assign(geom=obs_df[POINT_LOC])
+        obs_df["geom"].loc[obs_df["geom"].isna()] = obs_df[GRIDCELL_LOC]
+        obs_df = obs_df[["geom", UNIQUE_ID]]
+        obs_df.set_index(UNIQUE_ID, inplace=True)
         return obs_df
 
     def inner_join(self, primary, secondary, primary_field, secondary_field):
@@ -330,64 +287,62 @@ class SCLClassification(SCLTask):
         ).map(_flatten_fields)
 
     def zonify(self, df, savefc=None):
-        master_grid_df = pd.DataFrame(columns=self.ZONIFY_DF_COLUMNS)
+        master_grid_df = pd.DataFrame(columns=ZONIFY_DF_COLUMNS)
 
         def _max_frequency(feat):
-            hist = ee.Dictionary(feat.get(self.MASTER_CELL))
+            hist = ee.Dictionary(feat.get(MASTER_CELL))
             vals = hist.values()
             max = vals.reduce(ee.Reducer.max())
             index = vals.indexOf(max)
             max_key = ee.Number.parse(hist.keys().get(index)).toLong()
-            return feat.set(self.MASTER_CELL, max_key)
+            return feat.set(MASTER_CELL, max_key)
 
         obs_df = self._prep_obs_df(df)
         if not obs_df.empty:
             obs_features = self.df2fc(obs_df).filterBounds(self.geofilter)
 
-            scl_image = self.scl_polys.reduceToImage(
-                [self.SCLPOLY_ID], ee.Reducer.mode()
-            )
+            scl_image = self.scl_polys.reduceToImage([SCLPOLY_ID], ee.Reducer.mode())
             gridcells = scl_image.reduceRegions(
                 collection=self.gridcells,
-                reducer=ee.Reducer.mode().setOutputs([self.SCLPOLY_ID]),
+                reducer=ee.Reducer.mode().setOutputs([SCLPOLY_ID]),
                 scale=self.scale,
                 crs=self.crs,
             )
             gridcellimage = (
                 ee.ImageCollection(
                     [
-                        gridcells.reduceToImage([self.ZONES], ee.Reducer.mode()),
-                        gridcells.reduceToImage([self.EE_ID_LABEL], ee.Reducer.mode()),
+                        gridcells.reduceToImage([ZONES], ee.Reducer.mode()),
+                        gridcells.reduceToImage([EE_ID_LABEL], ee.Reducer.mode()),
                     ]
                 )
                 .toBands()
-                .rename([self.MASTER_GRID, self.MASTER_CELL])
+                .rename([MASTER_GRID, MASTER_CELL])
             )
 
             gridded_obs_features = gridcellimage.reduceRegions(
                 collection=obs_features,
                 reducer=ee.Reducer.mode()
-                .forEach([self.MASTER_GRID])
-                .combine(ee.Reducer.frequencyHistogram().forEach([self.MASTER_CELL])),
+                .forEach([MASTER_GRID])
+                .combine(ee.Reducer.frequencyHistogram().forEach([MASTER_CELL])),
                 scale=self.scale,
                 crs=self.crs,
             ).map(_max_frequency)
 
             return_obs_features = self.inner_join(
-                gridded_obs_features, gridcells, self.MASTER_CELL, self.EE_ID_LABEL
+                gridded_obs_features, gridcells, MASTER_CELL, EE_ID_LABEL
             )
 
             if savefc:
                 self.export_fc_ee(return_obs_features, savefc)
-            master_grid_df = self.fc2df(return_obs_features, self.ZONIFY_DF_COLUMNS)
+            master_grid_df = self.fc2df(return_obs_features, ZONIFY_DF_COLUMNS)
 
         df = pd.merge(left=df, right=master_grid_df)
 
         # save out non-intersecting observations
         # df_nonintersections = df[
-        #     (df[self.MASTER_GRID_LABEL] == self.EE_NODATA)
-        #     | (df[self.MASTER_CELL_LABEL] == self.EE_NODATA)
-        #     | (df[self.SCLPOLY_ID] == self.EE_NODATA)
+        #     (df[MASTER_GRID] == self.EE_NODATA)
+        #     | (df[MASTER_CELL] == self.EE_NODATA)
+        #     | (df[SCLPOLY_ID] == self.EE_NODATA)
         # ]
         # if not df_nonintersections.empty:
         #     timestr = time.strftime("%Y%m%d-%H%M%S")
@@ -395,9 +350,9 @@ class SCLClassification(SCLTask):
         #
         # # Filter out rows not in any zone and rows not in any gridcell (-9999)
         # df = df[
-        #     (df[self.MASTER_GRID_LABEL] != self.EE_NODATA)
-        #     & (df[self.MASTER_CELL_LABEL] != self.EE_NODATA)
-        #     & (df[self.SCLPOLY_ID] != self.EE_NODATA)
+        #     (df[MASTER_GRID] != self.EE_NODATA)
+        #     & (df[MASTER_CELL] != self.EE_NODATA)
+        #     & (df[SCLPOLY_ID] != self.EE_NODATA)
         # ]
 
         return df
@@ -406,7 +361,7 @@ class SCLClassification(SCLTask):
         tempfile = str(uuid.uuid4())
         blob = f"prob/{self.species}/{self.scenario}/{self.taskdate}/{tempfile}"
         task_id = self.export_fc_cloudstorage(
-            featurecollection, self.BUCKET, blob, "CSV", columns
+            featurecollection, BUCKET, blob, "CSV", columns
         )
         self.wait()
         csv = self._download_from_cloudstorage(f"{blob}.csv", f"{tempfile}.csv")
@@ -414,10 +369,10 @@ class SCLClassification(SCLTask):
 
         # uncomment to export for QA in a GIS
         # shp_task_id = self.export_fc_cloudstorage(
-        #     featurecollection, self.BUCKET, blob, "GeoJSON", columns
+        #     featurecollection, BUCKET, blob, "GeoJSON", columns
         # )
 
-        df = pd.read_csv(csv, encoding="utf-8")
+        df = pd.read_csv(csv)
         self._remove_from_cloudstorage(f"{blob}.csv")
         return df
 
@@ -432,7 +387,7 @@ class SCLClassification(SCLTask):
         self._upload_to_cloudstorage(f"{tempfile}.csv", f"{blob}.csv")
         table_asset_name, table_asset_id = self._prep_asset_id(f"scratch/{tempfile}")
         task_id = self._cp_storage_to_ee_table(
-            f"gs://{self.BUCKET}/{blob}.csv", table_asset_id
+            f"gs://{BUCKET}/{blob}.csv", table_asset_id
         )
         self.wait()
         self._remove_from_cloudstorage(f"{blob}.csv")
@@ -444,16 +399,14 @@ class SCLClassification(SCLTask):
         if self._df_adhoc is None:
             _csvpath = "adhoc.csv"
             if self.use_cache and Path(_csvpath).is_file():
-                self._df_adhoc = pd.read_csv(
-                    _csvpath, encoding="utf-8", index_col=self.MASTER_CELL
-                )
+                self._df_adhoc = pd.read_csv(_csvpath)
             else:
                 query = (
-                    f"SELECT {self.UNIQUE_ID}, "
-                    f"{self.POINT_LOC}, "
-                    f"{self.GRIDCELL_LOC}, "
-                    f"EndObservationDate AS {self.DATE}, "
-                    f"{self.DENSITY} "
+                    f"SELECT {UNIQUE_ID}, "
+                    f"{POINT_LOC}, "
+                    f"{GRIDCELL_LOC}, "
+                    f"EndObservationDate AS {DATE}, "
+                    f"{DENSITY} "
                     f"FROM dbo.vw_CI_AdHocObservation "
                     f"WHERE ("
                     f"  DATEDIFF(YEAR, EndObservationDate, '{self.taskdate}') <= {self.inputs['obs_adhoc']['maxage']}"
@@ -467,10 +420,8 @@ class SCLClassification(SCLTask):
                 print("zonify adhoc")
                 self._df_adhoc = self.zonify(self._df_adhoc)
                 # self._df_adhoc = self.zonify(self._df_adhoc, "scratch/adhoc")
-                self._df_adhoc = self._df_adhoc.drop(
-                    [self.POINT_LOC, self.GRIDCELL_LOC], axis=1
-                )
-                self._df_adhoc.set_index(self.MASTER_CELL, inplace=True)
+                self._df_adhoc = self._df_adhoc.drop([POINT_LOC, GRIDCELL_LOC], axis=1)
+            # self._df_adhoc.set_index(MASTER_CELL, inplace=True)
 
             if self.use_cache:
                 self._df_adhoc.to_csv(_csvpath)
@@ -482,17 +433,15 @@ class SCLClassification(SCLTask):
         if self._df_ct is None:
             _csvpath = "cameratrap.csv"
             if self.use_cache and Path(_csvpath).is_file():
-                self._df_ct = pd.read_csv(
-                    _csvpath, encoding="utf-8", index_col="CameraTrapDeploymentID"
-                )
+                self._df_ct = pd.read_csv(_csvpath)
             else:
                 query = (
-                    f"SELECT {self.UNIQUE_ID}, "
+                    f"SELECT {UNIQUE_ID}, "
                     f"CameraTrapDeploymentID, "
-                    f"{self.POINT_LOC}, "
-                    f"{self.GRIDCELL_LOC}, "
-                    f"PickupDatetime AS {self.DATE}, "
-                    f"{self.CT_DAYS_OPERATING} "
+                    f"{POINT_LOC}, "
+                    f"{GRIDCELL_LOC}, "
+                    f"PickupDatetime AS {DATE}, "
+                    f"{CT_DAYS_OPERATING} "
                     f"FROM dbo.vw_CI_CameraTrapDeployment "
                     f"WHERE ("
                     f"  DATEDIFF(YEAR, PickupDatetime, '{self.taskdate}') <= {self.inputs['obs_ct']['maxage']}"
@@ -517,20 +466,18 @@ class SCLClassification(SCLTask):
                 df_ct_obs = self._get_df(query)
 
                 df_ct_obs.set_index("CameraTrapDeploymentID", inplace=True)
-                df_ct_obs[self.CT_DAYS_DETECTED] = (
+                df_ct_obs[CT_DAYS_DETECTED] = (
                     df_ct_obs["AdultMaleCount"]
                     + df_ct_obs["AdultFemaleCount"]
                     + df_ct_obs["AdultSexUnknownCount"]
                     + df_ct_obs["SubAdultCount"]
                     + df_ct_obs["YoungCount"]
                 )
-                df_ct_obs[self.CT_DAYS_DETECTED] = df_ct_obs[
-                    self.CT_DAYS_DETECTED
-                ].astype(int)
+                df_ct_obs[CT_DAYS_DETECTED] = df_ct_obs[CT_DAYS_DETECTED].astype(int)
 
                 # number of days with > 0 detections per camera
                 df_ct_obsdays = (
-                    df_ct_obs[df_ct_obs[self.CT_DAYS_DETECTED] > 0]
+                    df_ct_obs[df_ct_obs[CT_DAYS_DETECTED] > 0]
                     .groupby(["CameraTrapDeploymentID"])
                     .count()
                 )
@@ -541,19 +488,20 @@ class SCLClassification(SCLTask):
                     right_index=True,
                     how="left",
                 )
-                self._df_ct[self.CT_DAYS_DETECTED].fillna(0, inplace=True)
-                self._df_ct.rename(columns={"UniqueID_x": self.UNIQUE_ID}, inplace=True)
+                self._df_ct[CT_DAYS_DETECTED].fillna(0, inplace=True)
+                self._df_ct.rename(columns={"UniqueID_x": UNIQUE_ID}, inplace=True)
                 self._df_ct = self._df_ct[
                     [
-                        self.UNIQUE_ID,
-                        self.DATE,
-                        self.MASTER_GRID,
-                        self.MASTER_CELL,
-                        self.SCLPOLY_ID,
-                        self.CT_DAYS_OPERATING,
-                        self.CT_DAYS_DETECTED,
+                        UNIQUE_ID,
+                        DATE,
+                        MASTER_GRID,
+                        MASTER_CELL,
+                        SCLPOLY_ID,
+                        CT_DAYS_OPERATING,
+                        CT_DAYS_DETECTED,
                     ]
                 ]
+                self._df_ct = self._df_ct.reset_index()
 
             if self.use_cache:
                 self._df_ct.to_csv(_csvpath)
@@ -565,17 +513,15 @@ class SCLClassification(SCLTask):
         if self._df_ss is None:
             _csvpath = "signsurvey.csv"
             if self.use_cache and Path(_csvpath).is_file():
-                self._df_ss = pd.read_csv(
-                    _csvpath, encoding="utf-8", index_col=self.MASTER_CELL
-                )
+                self._df_ss = pd.read_csv(_csvpath)
             else:
                 query = (
-                    f"SELECT {self.UNIQUE_ID}, "
-                    f"{self.POINT_LOC}, "
-                    f"{self.GRIDCELL_LOC}, "
-                    f"StartDate AS {self.DATE}, "
-                    f"{self.SS_SEGMENTS_SURVEYED}, "
-                    f"{self.SS_SEGMENTS_DETECTED} "
+                    f"SELECT {UNIQUE_ID}, "
+                    f"{POINT_LOC}, "
+                    f"{GRIDCELL_LOC}, "
+                    f"StartDate AS {DATE}, "
+                    f"{SS_SEGMENTS_SURVEYED}, "
+                    f"{SS_SEGMENTS_DETECTED} "
                     f"FROM dbo.vw_CI_SignSurveyObservation "
                     f"WHERE DATEDIFF(YEAR, StartDate, '{self.taskdate}') <= {self.inputs['obs_ss']['maxage']} "
                     f"AND StartDate <= Cast('{self.taskdate}' AS datetime) "
@@ -584,10 +530,8 @@ class SCLClassification(SCLTask):
                 print("zonify sign survey")
                 self._df_ss = self.zonify(self._df_ss)
                 # self._df_ss = self.zonify(self._df_ss, "scratch/ss")
-                self._df_ss = self._df_ss.drop(
-                    [self.POINT_LOC, self.GRIDCELL_LOC], axis=1
-                )
-                self._df_ss.set_index(self.MASTER_CELL, inplace=True)
+                self._df_ss = self._df_ss.drop([POINT_LOC, GRIDCELL_LOC], axis=1)
+            # self._df_ss.set_index(MASTER_CELL, inplace=True)
 
             if self.use_cache:
                 self._df_ss.to_csv(_csvpath)
@@ -600,7 +544,7 @@ class SCLClassification(SCLTask):
             item = ee.List(item)
             feature = ee.Feature(item.get(0))
             poly_id = item.get(1)
-            return feature.set({self.SCLPOLY_ID: poly_id})
+            return feature.set({SCLPOLY_ID: poly_id})
 
         ids = ee.List.sequence(1, self.scl.size())
         scl_poly_list = ee.List(self.scl.toList(self.scl.size()))
@@ -610,7 +554,7 @@ class SCLClassification(SCLTask):
 
         return self.biomes.reduceRegions(
             collection=scl_polys_assigned,
-            reducer=ee.Reducer.mode().setOutputs([self.BIOME]),
+            reducer=ee.Reducer.mode().setOutputs([BIOME]),
             scale=self.scale,
             crs=self.crs,
         )
@@ -657,20 +601,18 @@ class SCLClassification(SCLTask):
     def reattribute(self, polys):
         def _round(feat):
             geom = feat.geometry()
-            eph = feat.get(self.HABITAT_AREA)
-            ceph = feat.get(self.CONNECTED_HABITAT_AREA)
+            eph = feat.get(HABITAT_AREA)
+            ceph = feat.get(CONNECTED_HABITAT_AREA)
             return ee.Feature(
                 geom,
                 {
-                    self.HABITAT_AREA: ee.Number(eph).round(),
-                    self.CONNECTED_HABITAT_AREA: ee.Number(ceph).round(),
+                    HABITAT_AREA: ee.Number(eph).round(),
+                    CONNECTED_HABITAT_AREA: ee.Number(ceph).round(),
                 },
             )
 
         return (
-            self.scl_image.select(
-                [self.HABITAT_AREA, self.CONNECTED_HABITAT_AREA]
-            ).reduceRegions(
+            self.scl_image.select([HABITAT_AREA, CONNECTED_HABITAT_AREA]).reduceRegions(
                 collection=polys,
                 reducer=ee.Reducer.sum(),
                 scale=self.scale,
@@ -679,38 +621,32 @@ class SCLClassification(SCLTask):
         ).map(_round)
 
     def calc(self):
-        # Temporary: export dataframes needed for probability modeling
-        # Make sure cache csvs don't exist locally before running
-        if self.use_cache:
-            prob_columns = [
-                self.SCLPOLY_ID,
-                self.BIOME,
-                self.COUNTRY,
-            ]
+        prob_columns = [
+            SCLPOLY_ID,
+            BIOME,
+            COUNTRY,
+        ]
+        # self.export_fc_ee(self.scl_polys, "assigned_scl_polys")
+        df_scl_polys = self.fc2df(self.scl_polys, columns=prob_columns)
 
-            # for join debugging
-            self.export_fc_ee(self.scl_polys, "assigned_scl_polys")
+        # print(df_scl_polys)
+        # print(self.df_adhoc)
+        # print(self.df_cameratrap)
+        # print(self.df_signsurvey)
 
-            df_scl_polys = self.fc2df(self.scl_polys, columns=prob_columns)
-            df_scl_polys.set_index(self.SCLPOLY_ID, inplace=True)
-            print(df_scl_polys)
-            df_scl_polys.to_csv("scl_polys.csv")
-
-        print(self.df_adhoc)
-        print(self.df_cameratrap)
-        print(self.df_signsurvey)
-
-        # Temporary: ingest probability model output csv, join to polys, and do classification
-        probout = self.df2fc(
-            pd.read_csv(
-                "scl_polys_out.csv", encoding="utf-8", index_col=self.SCLPOLY_ID
-            ),
+        df_scl_polys_probabilities = assign_probabilities(
+            df_polys=df_scl_polys,
+            df_adhoc=self.df_adhoc,
+            df_cameratrap=self.df_cameratrap,
+            df_signsurvey=self.df_signsurvey,
         )
+        # print(df_scl_polys_probabilities)
+        # df_scl_polys_probabilities.to_csv("df_scl_polys_probabilities.csv")
+        scl_polys_probabilities = self.df2fc(df_scl_polys_probabilities)
 
         scl_scored = self.inner_join(
-            self.scl_polys, probout, self.SCLPOLY_ID, self.SCLPOLY_ID
+            self.scl_polys, scl_polys_probabilities, SCLPOLY_ID, SCLPOLY_ID
         )
-        # self.export_fc_ee(scl_scored, "scl_scored")
 
         scl_species, scl_species_fragment = self.dissolve(
             scl_scored, "scl_species", "scl_fragment_historical_presence"
