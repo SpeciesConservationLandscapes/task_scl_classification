@@ -124,8 +124,7 @@ class SCLClassification(SCLTask):
             "scl_restoration": ee.Filter.Or(
                 ee.Filter.And(
                     ee.Filter.greaterThanOrEquals(
-                        leftField=CONNECTED_HABITAT_AREA,
-                        rightField=MIN_PATCHSIZE,
+                        leftField=CONNECTED_HABITAT_AREA, rightField=MIN_PATCHSIZE
                     ),
                     ee.Filter.eq(RANGE, self.thresholds["current_range"]),
                     ee.Filter.lt(PROBABILITY, self.thresholds["probability"]),
@@ -133,8 +132,7 @@ class SCLClassification(SCLTask):
                 ),
                 ee.Filter.And(
                     ee.Filter.greaterThanOrEquals(
-                        leftField=CONNECTED_HABITAT_AREA,
-                        rightField=MIN_PATCHSIZE,
+                        leftField=CONNECTED_HABITAT_AREA, rightField=MIN_PATCHSIZE
                     ),
                     ee.Filter.lt(RANGE, self.thresholds["current_range"]),
                 ),
