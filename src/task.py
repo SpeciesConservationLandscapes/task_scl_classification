@@ -621,12 +621,7 @@ class SCLClassification(SCLTask):
         ).map(_round)
 
     def calc(self):
-        prob_columns = [
-            SCLPOLY_ID,
-            BIOME,
-            COUNTRY,
-        ]
-        # self.export_fc_ee(self.scl_polys, "assigned_scl_polys")
+        prob_columns = [SCLPOLY_ID, BIOME, COUNTRY]
         df_scl_polys = self.fc2df(self.scl_polys, columns=prob_columns)
 
         # print(df_scl_polys)
@@ -640,7 +635,6 @@ class SCLClassification(SCLTask):
             df_cameratrap=self.df_cameratrap,
             df_signsurvey=self.df_signsurvey,
         )
-        # print(df_scl_polys_probabilities)
         # df_scl_polys_probabilities.to_csv("df_scl_polys_probabilities.csv")
         scl_polys_probabilities = self.df2fc(df_scl_polys_probabilities)
 
@@ -655,7 +649,7 @@ class SCLClassification(SCLTask):
             scl_scored, "scl_survey", "scl_fragment_historical_nopresence"
         )
         scl_restoration, scl_rest_frag = self.dissolve(
-            scl_scored, "scl_restoration", "scl_fragment_extirpated_presence"
+            scl_scored, "scl_restoration", "scl_fragment_extirpated"
         )
 
         self.poly_export(self.reattribute(scl_species), "scl_species")
