@@ -13,7 +13,7 @@ from google.cloud.storage import Client
 from google.cloud.exceptions import NotFound
 from pathlib import Path
 from task_base import SCLTask, EETaskError
-from constants import *
+from includes.constants import *
 from probability.probability_panthera_tigris import assign_probabilities
 
 

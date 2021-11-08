@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import pyjags as pj
 from functools import reduce
-from constants import *  # better way to handle, like relative imports?
+from includes.constants import *
 
 
 def create_df(cam, sign, df_adhoc, df_poly):
