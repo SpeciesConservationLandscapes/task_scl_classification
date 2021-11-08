@@ -1,0 +1,32 @@
+model{
+
+for (i in 1:Nsurvgrid){
+	p_use_i[i]=p_use0[poly_id[i]]*phi[poly_id[i]]
+	p_use[i]~dbern(p_use_i[i])
+	ps[i]=psign*p_use[i]
+	pc[i]=pcam*p_use[i]
+	nsdet[i]~dbin(ps[i],nstrials[i])
+	ncdet[i]~dbin(pc[i],nctrials[i])
+	}
+
+for (i in 1:Npoly){
+	logit(phi0[i])=beta0+beta[country[i]]+beta2[biome[i]]
+	phi[i]~dbern(phi0[i])
+	lp_use[i]~dnorm(mu_use,tau_use)
+	logit(p_use0[i])=lp_use[i]
+	}
+## priors
+for (i in 1:Ncountry){beta[i]~dnorm(0,tau_phi)}
+for (i in 1:Nbiome){beta2[i]~dnorm(0,tau_phi2)}
+tau_phi<-pow(sig_phi,-2)
+tau_phi2<-pow(sig_phi2,-2)
+tau_use<-pow(sig_use,-2)
+sig_phi2~dunif(0,2)
+sig_phi~dunif(0,2)
+#b_area~dnorm(0,2)
+beta0~dnorm(0,2)
+mu_use~dnorm(0,2)
+sig_use~dunif(0,2)
+pcam~dunif(0,1)
+psign~dunif(0,1)	
+}
