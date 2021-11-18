@@ -19,6 +19,11 @@ class SCLClassification(SCLTask):
         "obs_adhoc": {"maxage": 5},
         "obs_ss": {"maxage": 5},
         "obs_ct": {"maxage": 5},
+        "historical_range": {
+            "ee_type": SCLTask.IMAGE,
+            "ee_path": "historical_range_path",
+            "static": True,
+        },
         "scl": {
             "ee_type": SCLTask.FEATURECOLLECTION,
             "ee_path": "scl_polys_path",
@@ -48,6 +53,11 @@ class SCLClassification(SCLTask):
             "ee_type": SCLTask.FEATURECOLLECTION,
             "ee_path": "RESOLVE/ECOREGIONS/2017",
             "static": True,
+        },
+        "pas": {
+            "ee_type": SCLTask.FEATURECOLLECTION,
+            "ee_path": "WCMC/WDPA/current/polygons",
+            "maxage": 1,
         },
     }
     thresholds = {
@@ -79,6 +89,9 @@ class SCLClassification(SCLTask):
 
         self._df_adhoc = self._df_ct = self._df_ss = None
         self.fc_csvs = []
+        self.historical_range_fc = ee.FeatureCollection(
+            self.inputs["historical_range"]["ee_path"]
+        )
         self.scl, _ = self.get_most_recent_featurecollection(
             self.inputs["scl"]["ee_path"]
         )
@@ -95,6 +108,13 @@ class SCLClassification(SCLTask):
         self.countries = ee.FeatureCollection(self.inputs["countries"]["ee_path"])
         self.ecoregions = ee.FeatureCollection(self.inputs["ecoregions"]["ee_path"])
         self.biomes = self.ecoregions.reduceToImage(["BIOME_NUM"], ee.Reducer.mode())
+        taskyear = ee.Date(self.taskdate.strftime(self.DATE_FORMAT)).get("year")
+        self.pas = (
+            ee.FeatureCollection(self.inputs["pas"]["ee_path"])
+            .filterBounds(self.historical_range_fc.geometry())
+            .filter(ee.Filter.neq("STATUS", "Proposed"))
+            .filter(ee.Filter.lte("STATUS_YR", taskyear))
+        )
         self.intersects = ee.Filter.intersects(".geo", None, ".geo")
 
         self.scl_poly_filters = {
@@ -153,6 +173,9 @@ class SCLClassification(SCLTask):
             ),
         }
 
+    def historical_range_path(self):
+        return f"{self.speciesdir}/historical_range"
+
     def scl_polys_path(self):
         return f"{self.ee_rootdir}/pothab/scl_polys"
 
@@ -194,41 +217,51 @@ class SCLClassification(SCLTask):
     def zonify(self, df, savefc=None):
         master_grid_df = pd.DataFrame(columns=ZONIFY_DF_COLUMNS)
 
-        def _max_frequency(feat):
-            hist = ee.Dictionary(feat.get(MASTER_CELL))
+        def _get_max(hist):
             vals = hist.values()
             max = vals.reduce(ee.Reducer.max())
             index = vals.indexOf(max)
-            max_key = ee.Number.parse(hist.keys().get(index)).toLong()
-            return feat.set(MASTER_CELL, max_key)
+            return ee.Number.parse(hist.keys().get(index)).toLong()
+
+        def _max_frequency(feat):
+            hist_zone = ee.Dictionary(feat.get(MASTER_CELL))
+            max_zone = _get_max(hist_zone)
+            hist_pa = ee.Dictionary(feat.get(PROTECTED))
+            max_pa = _get_max(hist_pa)
+            return feat.set(MASTER_CELL, max_zone, PROTECTED, max_pa)
 
         obs_df = self._prep_obs_df(df)
         if not obs_df.empty:
             obs_features = self.df2fc(obs_df).filterBounds(self.geofilter)
 
-            scl_image = self.scl_polys.reduceToImage([SCLPOLY_ID], ee.Reducer.mode())
-            gridcells = scl_image.reduceRegions(
+            polyid_image = self.scl.reduceToImage([SCLPOLY_ID], ee.Reducer.mode())
+            gridcells = polyid_image.reduceRegions(
                 collection=self.gridcells,
                 reducer=ee.Reducer.mode().setOutputs([SCLPOLY_ID]),
                 scale=self.scale,
                 crs=self.crs,
             )
-            gridcellimage = (
+            attrib_image = (
                 ee.ImageCollection(
                     [
                         gridcells.reduceToImage([ZONES], ee.Reducer.mode()),
                         gridcells.reduceToImage([EE_ID_LABEL], ee.Reducer.mode()),
+                        self.pas.reduceToImage(["WDPAID"], ee.Reducer.first())
+                        .gt(0)
+                        .unmask(),
                     ]
                 )
                 .toBands()
-                .rename([MASTER_GRID, MASTER_CELL])
+                .rename([MASTER_GRID, MASTER_CELL, PROTECTED])
             )
 
-            gridded_obs_features = gridcellimage.reduceRegions(
+            gridded_obs_features = attrib_image.reduceRegions(
                 collection=obs_features,
                 reducer=ee.Reducer.mode()
                 .forEach([MASTER_GRID])
-                .combine(ee.Reducer.frequencyHistogram().forEach([MASTER_CELL])),
+                .combine(
+                    ee.Reducer.frequencyHistogram().forEach([MASTER_CELL, PROTECTED])
+                ),
                 scale=self.scale,
                 crs=self.crs,
             ).map(_max_frequency)
@@ -439,27 +472,6 @@ class SCLClassification(SCLTask):
 
         return self._df_ss
 
-    @property
-    def scl_polys(self):
-        def _assign_ids(item):
-            item = ee.List(item)
-            feature = ee.Feature(item.get(0))
-            poly_id = item.get(1)
-            return feature.set({SCLPOLY_ID: poly_id})
-
-        ids = ee.List.sequence(1, self.scl.size())
-        scl_poly_list = ee.List(self.scl.toList(self.scl.size()))
-        scl_polys_assigned = ee.FeatureCollection(
-            scl_poly_list.zip(ids).map(_assign_ids)
-        )
-
-        return self.biomes.reduceRegions(
-            collection=scl_polys_assigned,
-            reducer=ee.Reducer.mode().setOutputs([BIOME]),
-            scale=self.scale,
-            crs=self.crs,
-        )
-
     def dissolve(self, polys, core_label, fragment_label):
         cores = polys.filter(self.scl_poly_filters[core_label])
         fragments = polys.filter(self.scl_poly_filters[fragment_label])
@@ -522,8 +534,9 @@ class SCLClassification(SCLTask):
         ).map(_round)
 
     def calc(self):
-        prob_columns = [SCLPOLY_ID, BIOME, COUNTRY]
-        df_scl_polys = self.fc2df(self.scl_polys, columns=prob_columns)
+        prob_columns = [SCLPOLY_ID, BIOME, COUNTRY, HABITAT_AREA, "pa_proportion"]
+        df_scl_polys = self.fc2df(self.scl, columns=prob_columns)
+        # df_scl_polys.to_csv("scl_polys.csv")
 
         # print(df_scl_polys)
         # print(self.df_adhoc)
