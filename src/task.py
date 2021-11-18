@@ -1,33 +1,28 @@
 import argparse
 import ee
 import os
-import re
-import subprocess
 import numpy as np
 import pandas as pd
 import pyodbc
 import uuid
-from typing import Optional, Union
-
-from google.cloud.storage import Client
-from google.cloud.exceptions import NotFound
+from typing import Optional
 from pathlib import Path
 from task_base import SCLTask, EETaskError
 from includes.constants import *
 from probability.probability_panthera_tigris import assign_probabilities
 
 
-class ConversionException(Exception):
-    pass
-
-
 # noinspection PyTypeChecker
 class SCLClassification(SCLTask):
-    google_creds_path = "/.google_creds"
     inputs = {
         "obs_adhoc": {"maxage": 5},
         "obs_ss": {"maxage": 5},
         "obs_ct": {"maxage": 5},
+        "historical_range": {
+            "ee_type": SCLTask.IMAGE,
+            "ee_path": "historical_range_path",
+            "static": True,
+        },
         "scl": {
             "ee_type": SCLTask.FEATURECOLLECTION,
             "ee_path": "scl_polys_path",
@@ -58,6 +53,11 @@ class SCLClassification(SCLTask):
             "ee_path": "RESOLVE/ECOREGIONS/2017",
             "static": True,
         },
+        "pas": {
+            "ee_type": SCLTask.FEATURECOLLECTION,
+            "ee_path": "WCMC/WDPA/current/polygons",
+            "maxage": 1,
+        },
     }
     thresholds = {
         "current_range": 2,
@@ -86,15 +86,11 @@ class SCLClassification(SCLTask):
             f"{self.OBSDB_NAME};UID={self.OBSDB_USER};PWD={self.OBSDB_PASS};TDS_VERSION=8.0"
         )
 
-        # Set up google cloud credentials separate from ee creds
-        creds_path = Path(self.google_creds_path)
-        if creds_path.exists() is False:
-            with open(str(creds_path), "w") as f:
-                f.write(self.service_account_key)
-        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = self.google_creds_path
-
         self._df_adhoc = self._df_ct = self._df_ss = None
         self.fc_csvs = []
+        self.historical_range_fc = ee.FeatureCollection(
+            self.inputs["historical_range"]["ee_path"]
+        )
         self.scl, _ = self.get_most_recent_featurecollection(
             self.inputs["scl"]["ee_path"]
         )
@@ -111,6 +107,13 @@ class SCLClassification(SCLTask):
         self.countries = ee.FeatureCollection(self.inputs["countries"]["ee_path"])
         self.ecoregions = ee.FeatureCollection(self.inputs["ecoregions"]["ee_path"])
         self.biomes = self.ecoregions.reduceToImage(["BIOME_NUM"], ee.Reducer.mode())
+        taskyear = ee.Date(self.taskdate.strftime(self.DATE_FORMAT)).get("year")
+        self.pas = (
+            ee.FeatureCollection(self.inputs["pas"]["ee_path"])
+            .filterBounds(self.historical_range_fc.geometry())
+            .filter(ee.Filter.neq("STATUS", "Proposed"))
+            .filter(ee.Filter.lte("STATUS_YR", taskyear))
+        )
         self.intersects = ee.Filter.intersects(".geo", None, ".geo")
 
         self.scl_poly_filters = {
@@ -169,6 +172,9 @@ class SCLClassification(SCLTask):
             ),
         }
 
+    def historical_range_path(self):
+        return f"{self.speciesdir}/historical_range"
+
     def scl_polys_path(self):
         return f"{self.ee_rootdir}/pothab/scl_polys"
 
@@ -184,63 +190,6 @@ class SCLClassification(SCLTask):
     def poly_export(self, polys, scl_name):
         path = f"pothab/{scl_name}"
         self.export_fc_ee(polys, path)
-
-    def _download_from_cloudstorage(self, blob_path: str, local_path: str) -> str:
-        client = Client()
-        bucket = client.get_bucket(BUCKET)
-        blob = bucket.blob(blob_path)
-        blob.download_to_filename(local_path)
-        return local_path
-
-    def _upload_to_cloudstorage(self, local_path: str, blob_path: str) -> str:
-        client = Client()
-        bucket = client.bucket(BUCKET)
-        blob = bucket.blob(blob_path)
-        blob.upload_from_filename(local_path, timeout=3600)
-        return blob_path
-
-    def _remove_from_cloudstorage(self, blob_path: str):
-        client = Client()
-        bucket = client.bucket(BUCKET)
-        try:  # don't fail entire task if this fails
-            bucket.delete_blob(blob_path)
-        except NotFound:
-            print(f"{blob_path} not found")
-
-    def _parse_task_id(self, output: Union[str, bytes]) -> Optional[str]:
-        if isinstance(output, bytes):
-            text = output.decode("utf-8")
-        else:
-            text = output
-
-        task_id_regex = re.compile(r"(?<=ID: ).*", flags=re.IGNORECASE)
-        try:
-            matches = task_id_regex.search(text)
-            if matches is None:
-                return None
-            return matches[0]
-        except TypeError:
-            return None
-
-    def _cp_storage_to_ee_table(self, blob_uri: str, table_asset_id: str) -> str:
-        try:
-            cmd = [
-                "/usr/local/bin/earthengine",
-                f"--service_account_file={self.google_creds_path}",
-                "upload table",
-                f"--asset_id={table_asset_id}",
-                blob_uri,
-            ]
-            output = subprocess.check_output(
-                " ".join(cmd), stderr=subprocess.STDOUT, shell=True
-            )
-            task_id = self._parse_task_id(output)
-            if task_id is None:
-                raise TypeError("task_id is None")
-            self.ee_tasks[task_id] = {}
-            return task_id
-        except subprocess.CalledProcessError as err:
-            raise ConversionException(err.stdout)
 
     def _get_df(self, query):
         _scenario_clause = (
@@ -264,64 +213,54 @@ class SCLClassification(SCLTask):
         obs_df.set_index(UNIQUE_ID, inplace=True)
         return obs_df
 
-    def inner_join(self, primary, secondary, primary_field, secondary_field):
-        def _flatten_fields(feat):
-            primary_feature = ee.Feature(feat.get("primary"))
-            secondary_feature = ee.Feature(feat.get("secondary"))
-            return_feat = ee.Feature(
-                primary_feature.geometry(),
-                primary_feature.toDictionary().combine(
-                    secondary_feature.toDictionary()
-                ),
-            )
-            return return_feat
-
-        return (
-            ee.Join.inner("primary", "secondary").apply(
-                primary,
-                secondary,
-                ee.Filter.equals(leftField=primary_field, rightField=secondary_field),
-            )
-        ).map(_flatten_fields)
-
     def zonify(self, df, savefc=None):
         master_grid_df = pd.DataFrame(columns=ZONIFY_DF_COLUMNS)
 
-        def _max_frequency(feat):
-            hist = ee.Dictionary(feat.get(MASTER_CELL))
+        def _get_max(hist):
             vals = hist.values()
             max = vals.reduce(ee.Reducer.max())
             index = vals.indexOf(max)
-            max_key = ee.Number.parse(hist.keys().get(index)).toLong()
-            return feat.set(MASTER_CELL, max_key)
+            return ee.Number.parse(hist.keys().get(index)).toLong()
+
+        def _max_frequency(feat):
+            hist_zone = ee.Dictionary(feat.get(MASTER_CELL))
+            max_zone = _get_max(hist_zone)
+            hist_pa = ee.Dictionary(feat.get(PROTECTED))
+            max_pa = _get_max(hist_pa)
+            return feat.set(MASTER_CELL, max_zone, PROTECTED, max_pa)
 
         obs_df = self._prep_obs_df(df)
         if not obs_df.empty:
             obs_features = self.df2fc(obs_df).filterBounds(self.geofilter)
 
-            scl_image = self.scl_polys.reduceToImage([SCLPOLY_ID], ee.Reducer.mode())
-            gridcells = scl_image.reduceRegions(
+            polyid_image = self.scl.reduceToImage([SCLPOLY_ID], ee.Reducer.mode())
+            gridcells = polyid_image.reduceRegions(
                 collection=self.gridcells,
                 reducer=ee.Reducer.mode().setOutputs([SCLPOLY_ID]),
                 scale=self.scale,
                 crs=self.crs,
             )
-            gridcellimage = (
+            attrib_image = (
                 ee.ImageCollection(
                     [
                         gridcells.reduceToImage([ZONES], ee.Reducer.mode()),
                         gridcells.reduceToImage([EE_ID_LABEL], ee.Reducer.mode()),
+                        self.pas.reduceToImage(["WDPAID"], ee.Reducer.first())
+                        .gt(0)
+                        .unmask(),
                     ]
                 )
                 .toBands()
-                .rename([MASTER_GRID, MASTER_CELL])
+                .rename([MASTER_GRID, MASTER_CELL, PROTECTED])
             )
 
-            gridded_obs_features = gridcellimage.reduceRegions(
+            gridded_obs_features = attrib_image.reduceRegions(
                 collection=obs_features,
                 reducer=ee.Reducer.mode()
                 .forEach([MASTER_GRID])
-                .combine(ee.Reducer.frequencyHistogram().forEach([MASTER_CELL])),
+                .combine(
+                    ee.Reducer.frequencyHistogram().forEach([MASTER_CELL, PROTECTED])
+                ),
                 scale=self.scale,
                 crs=self.crs,
             ).map(_max_frequency)
@@ -358,20 +297,18 @@ class SCLClassification(SCLTask):
     def fc2df(self, featurecollection, columns=None):
         tempfile = str(uuid.uuid4())
         blob = f"prob/{self.species}/{self.scenario}/{self.taskdate}/{tempfile}"
-        task_id = self.export_fc_cloudstorage(
-            featurecollection, BUCKET, blob, "CSV", columns
-        )
+        task_id = self.table2storage(featurecollection, BUCKET, blob, "CSV", columns)
         self.wait()
-        csv = self._download_from_cloudstorage(f"{blob}.csv", f"{tempfile}.csv")
+        csv = self.download_from_cloudstorage(f"{blob}.csv", f"{tempfile}.csv")
         self.fc_csvs.append((f"{tempfile}.csv", None))
 
         # uncomment to export for QA in a GIS
-        # shp_task_id = self.export_fc_cloudstorage(
+        # shp_task_id = self.table2storage(
         #     featurecollection, BUCKET, blob, "GeoJSON", columns
         # )
 
         df = pd.read_csv(csv)
-        self._remove_from_cloudstorage(f"{blob}.csv")
+        self.remove_from_cloudstorage(f"{blob}.csv")
         return df
 
     def df2fc(self, df: pd.DataFrame) -> Optional[ee.FeatureCollection]:
@@ -382,13 +319,11 @@ class SCLClassification(SCLTask):
 
         df.replace(np.inf, 0, inplace=True)
         df.to_csv(f"{tempfile}.csv")
-        self._upload_to_cloudstorage(f"{tempfile}.csv", f"{blob}.csv")
+        self.upload_to_cloudstorage(f"{tempfile}.csv", f"{blob}.csv")
         table_asset_name, table_asset_id = self._prep_asset_id(f"scratch/{tempfile}")
-        task_id = self._cp_storage_to_ee_table(
-            f"gs://{BUCKET}/{blob}.csv", table_asset_id
-        )
+        task_id = self.storage2table(f"gs://{BUCKET}/{blob}.csv", table_asset_id)
         self.wait()
-        self._remove_from_cloudstorage(f"{blob}.csv")
+        self.remove_from_cloudstorage(f"{blob}.csv")
         self.fc_csvs.append((f"{tempfile}.csv", table_asset_id))
         return ee.FeatureCollection(table_asset_id)
 
@@ -497,6 +432,7 @@ class SCLClassification(SCLTask):
                         SCLPOLY_ID,
                         CT_DAYS_OPERATING,
                         CT_DAYS_DETECTED,
+                        PROTECTED,
                     ]
                 ]
                 self._df_ct = self._df_ct.reset_index()
@@ -535,27 +471,6 @@ class SCLClassification(SCLTask):
                 self._df_ss.to_csv(_csvpath)
 
         return self._df_ss
-
-    @property
-    def scl_polys(self):
-        def _assign_ids(item):
-            item = ee.List(item)
-            feature = ee.Feature(item.get(0))
-            poly_id = item.get(1)
-            return feature.set({SCLPOLY_ID: poly_id})
-
-        ids = ee.List.sequence(1, self.scl.size())
-        scl_poly_list = ee.List(self.scl.toList(self.scl.size()))
-        scl_polys_assigned = ee.FeatureCollection(
-            scl_poly_list.zip(ids).map(_assign_ids)
-        )
-
-        return self.biomes.reduceRegions(
-            collection=scl_polys_assigned,
-            reducer=ee.Reducer.mode().setOutputs([BIOME]),
-            scale=self.scale,
-            crs=self.crs,
-        )
 
     def dissolve(self, polys, core_label, fragment_label):
         cores = polys.filter(self.scl_poly_filters[core_label])
@@ -619,8 +534,10 @@ class SCLClassification(SCLTask):
         ).map(_round)
 
     def calc(self):
-        prob_columns = [SCLPOLY_ID, BIOME, COUNTRY]
-        df_scl_polys = self.fc2df(self.scl_polys, columns=prob_columns)
+        prob_columns = [SCLPOLY_ID, BIOME, COUNTRY, HABITAT_AREA, "pa_proportion"]
+        df_scl_polys = self.fc2df(self.scl, columns=prob_columns)
+        # df_scl_polys.to_csv("scl_polys.csv")
+        # df_scl_polys = pd.read_csv("scl_polys.csv")
 
         # print(df_scl_polys)
         # print(self.df_adhoc)
@@ -633,11 +550,12 @@ class SCLClassification(SCLTask):
             df_cameratrap=self.df_cameratrap,
             df_signsurvey=self.df_signsurvey,
         )
+        # df_scl_polys_probabilities = pd.read_csv("df_scl_polys_probabilities.csv", index_col="poly_id")
         # df_scl_polys_probabilities.to_csv("df_scl_polys_probabilities.csv")
         scl_polys_probabilities = self.df2fc(df_scl_polys_probabilities)
 
         scl_scored = self.inner_join(
-            self.scl_polys, scl_polys_probabilities, SCLPOLY_ID, SCLPOLY_ID
+            self.scl, scl_polys_probabilities, SCLPOLY_ID, SCLPOLY_ID
         )
 
         scl_species, scl_species_fragment = self.dissolve(

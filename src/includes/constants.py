@@ -19,11 +19,13 @@ EE_ID_LABEL = "id"
 MASTER_GRID = "mastergrid"
 MASTER_CELL = "mastergridcell"
 SCLPOLY_ID = "poly_id"
+PROTECTED = "protected"
 ZONIFY_DF_COLUMNS = [
     UNIQUE_ID,
     MASTER_GRID,
     MASTER_CELL,
     SCLPOLY_ID,
+    PROTECTED,
 ]
 
 # labels used in classification
