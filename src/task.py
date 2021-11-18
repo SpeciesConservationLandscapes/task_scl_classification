@@ -1,14 +1,13 @@
 import argparse
 import ee
 import os
-import subprocess
 import numpy as np
 import pandas as pd
 import pyodbc
 import uuid
-from typing import Optional, Union
+from typing import Optional
 from pathlib import Path
-from task_base import SCLTask, EETaskError, ConversionException
+from task_base import SCLTask, EETaskError
 from includes.constants import *
 from probability.probability_panthera_tigris import assign_probabilities
 
@@ -433,6 +432,7 @@ class SCLClassification(SCLTask):
                         SCLPOLY_ID,
                         CT_DAYS_OPERATING,
                         CT_DAYS_DETECTED,
+                        PROTECTED,
                     ]
                 ]
                 self._df_ct = self._df_ct.reset_index()
@@ -537,6 +537,7 @@ class SCLClassification(SCLTask):
         prob_columns = [SCLPOLY_ID, BIOME, COUNTRY, HABITAT_AREA, "pa_proportion"]
         df_scl_polys = self.fc2df(self.scl, columns=prob_columns)
         # df_scl_polys.to_csv("scl_polys.csv")
+        # df_scl_polys = pd.read_csv("scl_polys.csv")
 
         # print(df_scl_polys)
         # print(self.df_adhoc)
@@ -554,7 +555,7 @@ class SCLClassification(SCLTask):
         scl_polys_probabilities = self.df2fc(df_scl_polys_probabilities)
 
         scl_scored = self.inner_join(
-            self.scl_polys, scl_polys_probabilities, SCLPOLY_ID, SCLPOLY_ID
+            self.scl, scl_polys_probabilities, SCLPOLY_ID, SCLPOLY_ID
         )
 
         scl_species, scl_species_fragment = self.dissolve(
