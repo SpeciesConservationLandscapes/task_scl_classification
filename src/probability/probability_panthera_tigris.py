@@ -7,6 +7,7 @@ from includes.constants import *
 
 
 def create_df(cam, sign, df_adhoc, df_poly):
+    df_poly.sort_values(by=[SCLPOLY_ID], inplace=True)
     # Get the number of rows for a given poly_id where
     # For a given polygon cam detections > 0
     cam_detection = (

@@ -65,9 +65,6 @@ class SCLClassification(SCLTask):
         "survey_effort": 60,
     }
 
-    def scenario_habitat(self):
-        return f"{self.ee_rootdir}/pothab/potential_habitat"
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.use_cache = kwargs.get("use_cache") or os.environ.get("use_cache") or False
@@ -533,16 +530,20 @@ class SCLClassification(SCLTask):
             )
         ).map(_round)
 
+    def is_gridcell_unique(self, df):
+        df_counts = df.value_counts(subset=[MASTER_CELL, SCLPOLY_ID]).to_frame().reset_index()
+        df_counts.set_index(MASTER_CELL, inplace=True)
+        return df_counts.index.is_unique
+
     def calc(self):
         prob_columns = [SCLPOLY_ID, BIOME, COUNTRY, HABITAT_AREA, "pa_proportion"]
         df_scl_polys = self.fc2df(self.scl, columns=prob_columns)
         # df_scl_polys.to_csv("scl_polys.csv")
         # df_scl_polys = pd.read_csv("scl_polys.csv")
 
-        # print(df_scl_polys)
-        # print(self.df_adhoc)
-        # print(self.df_cameratrap)
-        # print(self.df_signsurvey)
+        # print(self.is_gridcell_unique(self.df_adhoc))
+        # print(self.is_gridcell_unique(self.df_cameratrap))
+        # print(self.is_gridcell_unique(self.df_signsurvey))
 
         df_scl_polys_probabilities = assign_probabilities(
             df_polys=df_scl_polys,
