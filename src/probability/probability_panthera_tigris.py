@@ -173,6 +173,9 @@ def format_data(df_polys, df_adhoc, df_cameratrap, df_signsurvey):
     uni_det = unique_values["uni_det"]
     gridded_df = create_df_grid(uni_det, sign, cam)
 
+    # Standardized area (0-1)
+    area_std = (df_polys[HABITAT_AREA] - np.mean(df_polys[HABITAT_AREA])) / np.std(df_polys[HABITAT_AREA])
+
     # data dictionary for JAGS input, additional checks for trials, positive integers needed
     jags_input_data = {
         "Npoly": unique_values["num_poly"],
@@ -186,6 +189,8 @@ def format_data(df_polys, df_adhoc, df_cameratrap, df_signsurvey):
         "ncdet": gridded_df["ncdet"],
         "nctrials": round(abs(gridded_df["nctrials"])),
         "nstrials": round(abs(gridded_df["nstrials"])),
+        "area_std": area_std,
+        "proportion_protected": df_polys[PROPORTION_PROTECTED]
     }
 
     jags_initial_values = dict(
@@ -204,7 +209,7 @@ def run_jags_model(jags_data_formatted):
         init=jags_data_formatted[2],
     )
     # only retain posterior draws from these parameters
-    parameters = [PROBABILITY, "phi0"]
+    parameters = [PROBABILITY, "phi0", "b_area", "b_proportion_protected"]
     samples = model.sample(iterations=10000, vars=parameters)
     samples_after_burn_in = pj.discard_burn_in_samples(samples, burn_in=1000)
 
@@ -265,6 +270,8 @@ def assign_probabilities(df_polys, df_adhoc, df_cameratrap, df_signsurvey):
 
     # runs the JAGS model, adjusting for burn-in period and total iterations (predetermined)
     jags_output = run_jags_model(jags_data_formatted=jags_data_formatted)
+
+    # TODO: output diagnostic parameter_output with jags_output as input to measure effectiveness of parameters
 
     # processes posterior output to desired output format with probabilities and effort as integers
     # output dataframe includes: poly_id, biome, country, known_occ, only_ah, surveyed, phi, effort

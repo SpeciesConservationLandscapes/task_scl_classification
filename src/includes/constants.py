@@ -30,6 +30,7 @@ ZONIFY_DF_COLUMNS = [
 
 # labels used in classification
 HABITAT_AREA = "eff_pot_hab_area"
+PROPORTION_PROTECTED = "pa_proportion"
 CONNECTED_HABITAT_AREA = "connected_eff_pot_hab_area"
 MIN_PATCHSIZE = "min_patch_size"
 PROBABILITY = "phi"

@@ -10,7 +10,7 @@ for (i in 1:Nsurvgrid){
 	}
 
 for (i in 1:Npoly){
-	logit(phi0[i])=beta0+beta[country[i]]+beta2[biome[i]]
+	logit(phi0[i])=beta0+beta[country[i]]+beta2[biome[i]]+b_area*area_std[i]+b_proportion_protected*proportion_protected[i]
 	phi[i]~dbern(phi0[i])
 	lp_use[i]~dnorm(mu_use,tau_use)
 	logit(p_use0[i])=lp_use[i]
@@ -23,7 +23,8 @@ tau_phi2<-pow(sig_phi2,-2)
 tau_use<-pow(sig_use,-2)
 sig_phi2~dunif(0,2)
 sig_phi~dunif(0,2)
-#b_area~dnorm(0,2)
+b_area~dnorm(0,2)
+b_proportion_protected~dnorm(0,2)
 beta0~dnorm(0,2)
 mu_use~dnorm(0,2)
 sig_use~dunif(0,2)
