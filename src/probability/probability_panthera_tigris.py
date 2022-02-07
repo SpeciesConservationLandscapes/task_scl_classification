@@ -4,6 +4,7 @@ import pandas as pd
 import pyjags as pj
 from functools import reduce
 from includes.constants import *
+import arviz as az
 
 
 def create_df(cam, sign, df_adhoc, df_poly):
@@ -72,6 +73,15 @@ def create_df(cam, sign, df_adhoc, df_poly):
 
 
 def get_unique_values(df_polys, sign, cam):
+    #output biome/country codes that match indices used in model
+    countries = pd.unique(df_polys[COUNTRY])
+    countries_df = pd.DataFrame(countries, columns = ['country_code'])
+    countries_df.to_csv('country_codes.csv')
+
+    biomes = pd.unique(df_polys[BIOME])
+    biomes_df = pd.DataFrame(biomes, columns = ['biome_code'])
+    biomes_df.to_csv('biome_codes.csv')
+
     unique_values_dict = dict()
     # len finds the length of the unique values contained within df_polys and the country column
     unique_values_dict["num_country"] = len(pd.unique(df_polys[COUNTRY]))
@@ -209,12 +219,24 @@ def run_jags_model(jags_data_formatted):
         init=jags_data_formatted[2],
     )
     # only retain posterior draws from these parameters
-    parameters = [PROBABILITY, "phi0", "b_area", "b_proportion_protected"]
-    samples = model.sample(iterations=10000, vars=parameters)
-    samples_after_burn_in = pj.discard_burn_in_samples(samples, burn_in=1000)
+    parameters = [PROBABILITY, "phi0", "b_area", "b_proportion_protected", "beta0", "beta", "beta2"]
+    samples = model.sample(iterations=15000, vars=parameters)
+    samples_after_burn_in = pj.discard_burn_in_samples(samples, burn_in=5000)
+
+    #convert jags output to summary form for diagnostics
+    pyjags_data = az.from_pyjags(samples_after_burn_in)
+    jags_parameter_diagnostics(pyjags_data)
 
     return samples_after_burn_in
 
+def jags_parameter_diagnostics(jags_output):
+    #summarize pyjags output and place in CSV file 
+    #want parameter summaries for: beta0, beta, beta2, phi0, b_area, b_proportion_protected
+    
+    pyjags_diagnostics = az.summary(jags_output['posterior'][["phi0", "b_area", "b_proportion_protected", "beta0", "beta", "beta2"]])
+    pyjags_diagnostics.to_csv('pyjags_diagnostics.csv')
+
+    return
 
 def jags_post_process(jags_output, df_poly_detections):
     # phi output, get mean over all iterations for each chain
