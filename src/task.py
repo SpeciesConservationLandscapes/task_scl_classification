@@ -291,9 +291,12 @@ class SCLClassification(SCLTask):
 
         return df
 
+    def _get_blob(self, file_name):
+        return f"prob/{self.species}/{self.scenario}/{self.taskdate}/{file_name}"
+
     def fc2df(self, featurecollection, columns=None):
         tempfile = str(uuid.uuid4())
-        blob = f"prob/{self.species}/{self.scenario}/{self.taskdate}/{tempfile}"
+        blob = self._get_blob(tempfile)
         task_id = self.table2storage(featurecollection, BUCKET, blob, "CSV", columns)
         self.wait()
         csv = self.download_from_cloudstorage(f"{blob}.csv", f"{tempfile}.csv")
@@ -310,7 +313,7 @@ class SCLClassification(SCLTask):
 
     def df2fc(self, df: pd.DataFrame) -> Optional[ee.FeatureCollection]:
         tempfile = str(uuid.uuid4())
-        blob = f"prob/{self.species}/{self.scenario}/{self.taskdate}/{tempfile}"
+        blob = self._get_blob(tempfile)
         if df.empty:
             return None
 
@@ -323,6 +326,13 @@ class SCLClassification(SCLTask):
         self.remove_from_cloudstorage(f"{blob}.csv")
         self.fc_csvs.append((f"{tempfile}.csv", table_asset_id))
         return ee.FeatureCollection(table_asset_id)
+
+    def df2storage(self, df: pd.DataFrame, file_name: str):
+        blob = self._get_blob(file_name)
+        if df.empty:
+            return
+        df.to_csv(f"{file_name}.csv")
+        self.upload_to_cloudstorage(f"{file_name}.csv", f"{blob}.csv")
 
     @property
     def df_adhoc(self):
@@ -545,7 +555,7 @@ class SCLClassification(SCLTask):
         # print(self.is_gridcell_unique(self.df_cameratrap))
         # print(self.is_gridcell_unique(self.df_signsurvey))
 
-        df_scl_polys_probabilities = assign_probabilities(
+        df_scl_polys_probabilities, metadata = assign_probabilities(
             df_polys=df_scl_polys,
             df_adhoc=self.df_adhoc,
             df_cameratrap=self.df_cameratrap,
@@ -575,6 +585,10 @@ class SCLClassification(SCLTask):
         self.poly_export(self.reattribute(scl_survey_fragment), "scl_survey_fragment")
         self.poly_export(self.reattribute(scl_restoration), "scl_restoration")
         self.poly_export(self.reattribute(scl_rest_frag), "scl_restoration_fragment")
+
+        self.df2storage(metadata["diagnostics"], "pyjags_diagnostics")
+        self.df2storage(metadata["ordered_unique_biomes"], "biome_codes")
+        self.df2storage(metadata["ordered_unique_countries"], "country_codes")
 
     def check_inputs(self):
         super().check_inputs()

@@ -2,6 +2,7 @@ BUCKET = "scl-pipeline"
 ZONES = "Zone"  # Attribute used by both zones and gridcells
 BIOME = "biome"
 COUNTRY = "country"
+NODATA = -9999
 
 # data labels coming from sql
 DATE = "datestamp"  # consistent label for dates coming from different obs queries
@@ -34,5 +35,6 @@ PROPORTION_PROTECTED = "pa_proportion"
 CONNECTED_HABITAT_AREA = "connected_eff_pot_hab_area"
 MIN_PATCHSIZE = "min_patch_size"
 PROBABILITY = "phi"
+PHI0 = "phi0"
 EFFORT = "effort"
 RANGE = "range"
