@@ -15,7 +15,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip install git+https://github.com/SpeciesConservationLandscapes/task_base.git \
     && pip install pandas==1.3.2 \
     && pip install pyodbc==4.0.32 \
-    && pip install pyjags==1.3.7
+    && pip install pyjags==1.3.7 \
+    && pip install arviz==0.11.4
 
 WORKDIR /app
 COPY $PWD/src .

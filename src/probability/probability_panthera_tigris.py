@@ -4,6 +4,12 @@ import pandas as pd
 import pyjags as pj
 from functools import reduce
 from includes.constants import *
+import arviz as az
+
+
+ITERATIONS = 15000
+BURNIN = 5000
+MODEL_PARAMETERS = [PHI0, "b_area", "b_proportion_protected", "beta0", "beta", "beta2"]
 
 
 def create_df(cam, sign, df_adhoc, df_poly):
@@ -73,26 +79,26 @@ def create_df(cam, sign, df_adhoc, df_poly):
 
 def get_unique_values(df_polys, sign, cam):
     unique_values_dict = dict()
-    # len finds the length of the unique values contained within df_polys and the country column
-    unique_values_dict["num_country"] = len(pd.unique(df_polys[COUNTRY]))
+    unique_values_dict["num_poly"] = len(df_polys)
+
+    countries = np.unique(df_polys[COUNTRY])
+    unique_values_dict["ordered_unique_countries"] = countries
     # Index position of unique country for each country value
     unique_values_dict[COUNTRY] = [
-        list(np.unique(df_polys[COUNTRY])).index(i) + 1 for i in df_polys[COUNTRY]
+        list(countries).index(i) + 1 for i in df_polys[COUNTRY]
     ]
-    # len finds the length of the unique values contained within df_polys and the biome column
-    unique_values_dict["num_biome"] = len(pd.unique(df_polys[BIOME]))
+    unique_values_dict["num_country"] = len(countries)
+
+    biomes = np.unique(df_polys[BIOME])
+    unique_values_dict["ordered_unique_biomes"] = biomes
     # Index position of unique biomes for each biome value
-    unique_values_dict[BIOME] = [
-        list(np.unique(df_polys[BIOME])).index(i) + 1 for i in df_polys[BIOME]
-    ]
-    unique_values_dict["num_poly"] = len(df_polys)
-    # the unique values of mastergridcell from sign and from cam combined
-    # Get unique values and counts
+    unique_values_dict[BIOME] = [list(biomes).index(i) + 1 for i in df_polys[BIOME]]
+    unique_values_dict["num_biome"] = len(biomes)
+
+    # get unique values of mastergridcell from sign and from cam combined
     sign_master_grid = pd.Series(pd.unique(sign[MASTER_CELL])).sort_values()
     cam_master_grid = pd.Series(pd.unique(cam[MASTER_CELL])).sort_values()
-    # concat them together
     uni_det = pd.concat([sign_master_grid, cam_master_grid])
-    # get rid of any duplicates from cam and sign
     unique_values_dict["uni_det"] = pd.unique(uni_det)
     unique_values_dict["num_surv_grid"] = len(pd.unique(uni_det))
 
@@ -155,8 +161,8 @@ def create_df_grid(uni_det, sign, cam):
 
 def format_data(df_polys, df_adhoc, df_cameratrap, df_signsurvey):
     # Filter sign/cam rows that don't fall within polys
-    sign = df_signsurvey.loc[df_signsurvey[SCLPOLY_ID] != -9999]
-    cam = df_cameratrap.loc[df_cameratrap[SCLPOLY_ID] != -9999]
+    sign = df_signsurvey.loc[df_signsurvey[SCLPOLY_ID] != NODATA]
+    cam = df_cameratrap.loc[df_cameratrap[SCLPOLY_ID] != NODATA]
     sign = sign[pd.isna(sign[SCLPOLY_ID]) == False]
     cam = cam[pd.isna(cam[SCLPOLY_ID]) == False]
 
@@ -174,7 +180,9 @@ def format_data(df_polys, df_adhoc, df_cameratrap, df_signsurvey):
     gridded_df = create_df_grid(uni_det, sign, cam)
 
     # Standardized area (0-1)
-    area_std = (df_polys[HABITAT_AREA] - np.mean(df_polys[HABITAT_AREA])) / np.std(df_polys[HABITAT_AREA])
+    area_std = (df_polys[HABITAT_AREA] - np.mean(df_polys[HABITAT_AREA])) / np.std(
+        df_polys[HABITAT_AREA]
+    )
 
     # data dictionary for JAGS input, additional checks for trials, positive integers needed
     jags_input_data = {
@@ -190,14 +198,20 @@ def format_data(df_polys, df_adhoc, df_cameratrap, df_signsurvey):
         "nctrials": round(abs(gridded_df["nctrials"])),
         "nstrials": round(abs(gridded_df["nstrials"])),
         "area_std": area_std,
-        "proportion_protected": df_polys[PROPORTION_PROTECTED]
+        "proportion_protected": df_polys[PROPORTION_PROTECTED],
     }
 
     jags_initial_values = dict(
         phi=df_poly_detections["known_occ"], p_use=gridded_df["known_use"]
     )
 
-    return jags_input_data, df_poly_detections, jags_initial_values
+    return (
+        jags_input_data,
+        df_poly_detections,
+        jags_initial_values,
+        unique_values["ordered_unique_biomes"],
+        unique_values["ordered_unique_countries"],
+    )
 
 
 def run_jags_model(jags_data_formatted):
@@ -209,11 +223,20 @@ def run_jags_model(jags_data_formatted):
         init=jags_data_formatted[2],
     )
     # only retain posterior draws from these parameters
-    parameters = [PROBABILITY, "phi0", "b_area", "b_proportion_protected"]
-    samples = model.sample(iterations=10000, vars=parameters)
-    samples_after_burn_in = pj.discard_burn_in_samples(samples, burn_in=1000)
+    parameters = [PROBABILITY] + MODEL_PARAMETERS
+    samples = model.sample(iterations=ITERATIONS, vars=parameters)
+    samples_after_burn_in = pj.discard_burn_in_samples(samples, burn_in=BURNIN)
 
     return samples_after_burn_in
+
+
+def jags_parameter_diagnostics(jags_output):
+    print("Creating model diagnostics")
+
+    pyjags_data = az.from_pyjags(jags_output)
+    pyjags_diagnostics = az.summary(pyjags_data["posterior"][MODEL_PARAMETERS])
+
+    return pyjags_diagnostics
 
 
 def jags_post_process(jags_output, df_poly_detections):
@@ -231,8 +254,8 @@ def jags_post_process(jags_output, df_poly_detections):
 
     # phi0 output, get mean over all iterations for each chain
     phi0_mean = []
-    for i in range(len(jags_output["phi0"])):
-        phi0_mean.append(jags_output["phi0"][i].flatten().mean())
+    for i in range(len(jags_output[PHI0])):
+        phi0_mean.append(jags_output[PHI0][i].flatten().mean())
 
     effort = [0] * len(jags_output[PROBABILITY])
     for i in range(len(jags_output[PROBABILITY])):
@@ -270,8 +293,7 @@ def assign_probabilities(df_polys, df_adhoc, df_cameratrap, df_signsurvey):
 
     # runs the JAGS model, adjusting for burn-in period and total iterations (predetermined)
     jags_output = run_jags_model(jags_data_formatted=jags_data_formatted)
-
-    # TODO: output diagnostic parameter_output with jags_output as input to measure effectiveness of parameters
+    jags_diagnostics = jags_parameter_diagnostics(jags_output)
 
     # processes posterior output to desired output format with probabilities and effort as integers
     # output dataframe includes: poly_id, biome, country, known_occ, only_ah, surveyed, phi, effort
@@ -279,4 +301,10 @@ def assign_probabilities(df_polys, df_adhoc, df_cameratrap, df_signsurvey):
         jags_output=jags_output, df_poly_detections=jags_data_formatted[1]
     )
 
-    return jags_processed
+    model_metadata = {
+        "diagnostics": jags_diagnostics,
+        "ordered_unique_biomes": pd.DataFrame(jags_data_formatted[3], columns=['biome_code']),
+        "ordered_unique_countries": pd.DataFrame(jags_data_formatted[4], columns=['country_code']),
+    }
+
+    return jags_processed, model_metadata
