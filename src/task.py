@@ -547,9 +547,9 @@ class SCLClassification(SCLTask):
 
     def calc(self):
         prob_columns = [SCLPOLY_ID, BIOME, COUNTRY, HABITAT_AREA, "pa_proportion"]
-        # df_scl_polys = self.fc2df(self.scl, columns=prob_columns)
+        df_scl_polys = self.fc2df(self.scl, columns=prob_columns)
         # df_scl_polys.to_csv("scl_polys.csv")
-        df_scl_polys = pd.read_csv("scl_polys.csv")
+        # df_scl_polys = pd.read_csv("scl_polys.csv")
 
         # print(self.is_gridcell_unique(self.df_adhoc))
         # print(self.is_gridcell_unique(self.df_cameratrap))
@@ -563,28 +563,28 @@ class SCLClassification(SCLTask):
         )
         # df_scl_polys_probabilities = pd.read_csv("df_scl_polys_probabilities.csv", index_col="poly_id")
         # df_scl_polys_probabilities.to_csv("df_scl_polys_probabilities.csv")
-        # scl_polys_probabilities = self.df2fc(df_scl_polys_probabilities)
-        #
-        # scl_scored = self.inner_join(
-        #     self.scl, scl_polys_probabilities, SCLPOLY_ID, SCLPOLY_ID
-        # )
-        #
-        # scl_species, scl_species_fragment = self.dissolve(
-        #     scl_scored, "scl_species", "scl_fragment_historical_presence"
-        # )
-        # scl_survey, scl_survey_fragment = self.dissolve(
-        #     scl_scored, "scl_survey", "scl_fragment_historical_nopresence"
-        # )
-        # scl_restoration, scl_rest_frag = self.dissolve(
-        #     scl_scored, "scl_restoration", "scl_fragment_extirpated"
-        # )
-        #
-        # self.poly_export(self.reattribute(scl_species), "scl_species")
-        # self.poly_export(self.reattribute(scl_species_fragment), "scl_species_fragment")
-        # self.poly_export(self.reattribute(scl_survey), "scl_survey")
-        # self.poly_export(self.reattribute(scl_survey_fragment), "scl_survey_fragment")
-        # self.poly_export(self.reattribute(scl_restoration), "scl_restoration")
-        # self.poly_export(self.reattribute(scl_rest_frag), "scl_restoration_fragment")
+        scl_polys_probabilities = self.df2fc(df_scl_polys_probabilities)
+
+        scl_scored = self.inner_join(
+            self.scl, scl_polys_probabilities, SCLPOLY_ID, SCLPOLY_ID
+        )
+
+        scl_species, scl_species_fragment = self.dissolve(
+            scl_scored, "scl_species", "scl_fragment_historical_presence"
+        )
+        scl_survey, scl_survey_fragment = self.dissolve(
+            scl_scored, "scl_survey", "scl_fragment_historical_nopresence"
+        )
+        scl_restoration, scl_rest_frag = self.dissolve(
+            scl_scored, "scl_restoration", "scl_fragment_extirpated"
+        )
+
+        self.poly_export(self.reattribute(scl_species), "scl_species")
+        self.poly_export(self.reattribute(scl_species_fragment), "scl_species_fragment")
+        self.poly_export(self.reattribute(scl_survey), "scl_survey")
+        self.poly_export(self.reattribute(scl_survey_fragment), "scl_survey_fragment")
+        self.poly_export(self.reattribute(scl_restoration), "scl_restoration")
+        self.poly_export(self.reattribute(scl_rest_frag), "scl_restoration_fragment")
 
         self.df2storage(metadata["diagnostics"], "pyjags_diagnostics")
         self.df2storage(metadata["ordered_unique_biomes"], "biome_codes")
