@@ -18,11 +18,6 @@ class SCLClassification(SCLTask):
         "obs_adhoc": {"maxage": 5},
         "obs_ss": {"maxage": 5},
         "obs_ct": {"maxage": 5},
-        "historical_range": {
-            "ee_type": SCLTask.IMAGE,
-            "ee_path": "historical_range_path",
-            "static": True,
-        },
         "scl": {
             "ee_type": SCLTask.FEATURECOLLECTION,
             "ee_path": "scl_polys_path",
@@ -42,21 +37,6 @@ class SCLClassification(SCLTask):
             "ee_type": SCLTask.FEATURECOLLECTION,
             "ee_path": "gridcells_path",
             "static": True,
-        },
-        "countries": {
-            "ee_type": SCLTask.FEATURECOLLECTION,
-            "ee_path": "USDOS/LSIB/2017",
-            "static": True,
-        },
-        "ecoregions": {
-            "ee_type": SCLTask.FEATURECOLLECTION,
-            "ee_path": "RESOLVE/ECOREGIONS/2017",
-            "static": True,
-        },
-        "pas": {
-            "ee_type": SCLTask.FEATURECOLLECTION,
-            "ee_path": "WCMC/WDPA/current/polygons",
-            "maxage": 1,
         },
     }
     thresholds = {
@@ -85,9 +65,6 @@ class SCLClassification(SCLTask):
 
         self._df_adhoc = self._df_ct = self._df_ss = None
         self.fc_csvs = []
-        self.historical_range_fc = ee.FeatureCollection(
-            self.inputs["historical_range"]["ee_path"]
-        )
         self.scl, _ = self.get_most_recent_featurecollection(
             self.inputs["scl"]["ee_path"]
         )
@@ -101,16 +78,7 @@ class SCLClassification(SCLTask):
         self.gridcells = ee.FeatureCollection(
             self.inputs["gridcells"]["ee_path"]
         ).filterBounds(self.geofilter)
-        self.countries = ee.FeatureCollection(self.inputs["countries"]["ee_path"])
-        self.ecoregions = ee.FeatureCollection(self.inputs["ecoregions"]["ee_path"])
         self.biomes = self.ecoregions.reduceToImage(["BIOME_NUM"], ee.Reducer.mode())
-        taskyear = ee.Date(self.taskdate.strftime(self.DATE_FORMAT)).get("year")
-        self.pas = (
-            ee.FeatureCollection(self.inputs["pas"]["ee_path"])
-            .filterBounds(self.historical_range_fc.geometry())
-            .filter(ee.Filter.neq("STATUS", "Proposed"))
-            .filter(ee.Filter.lte("STATUS_YR", taskyear))
-        )
         self.intersects = ee.Filter.intersects(".geo", None, ".geo")
 
         self.scl_poly_filters = {
@@ -168,9 +136,6 @@ class SCLClassification(SCLTask):
                 ee.Filter.lt(RANGE, self.thresholds["current_range"]),
             ),
         }
-
-    def historical_range_path(self):
-        return f"{self.speciesdir}/historical_range"
 
     def scl_polys_path(self):
         return f"{self.ee_rootdir}/pothab/scl_polys"
@@ -541,7 +506,9 @@ class SCLClassification(SCLTask):
         ).map(_round)
 
     def is_gridcell_unique(self, df):
-        df_counts = df.value_counts(subset=[MASTER_CELL, SCLPOLY_ID]).to_frame().reset_index()
+        df_counts = (
+            df.value_counts(subset=[MASTER_CELL, SCLPOLY_ID]).to_frame().reset_index()
+        )
         df_counts.set_index(MASTER_CELL, inplace=True)
         return df_counts.index.is_unique
 
