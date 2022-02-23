@@ -205,12 +205,23 @@ def format_data(df_polys, df_adhoc, df_cameratrap, df_signsurvey):
         phi=df_poly_detections["known_occ"], p_use=gridded_df["known_use"]
     )
 
+    fixed_effects_stats = {
+        # columns need to align with output of az.summary()
+        "area": [
+            np.mean(df_polys[HABITAT_AREA]),
+            np.std(df_polys[HABITAT_AREA]),
+        ]
+        + [None] * 7
+        # no need for proportion protected because it's not pre-standardized
+    }
+
     return (
         jags_input_data,
         df_poly_detections,
         jags_initial_values,
         unique_values["ordered_unique_biomes"],
         unique_values["ordered_unique_countries"],
+        fixed_effects_stats,
     )
 
 
@@ -230,11 +241,13 @@ def run_jags_model(jags_data_formatted):
     return samples_after_burn_in
 
 
-def jags_parameter_diagnostics(jags_output):
+def parameter_diagnostics(jags_output, fixed_effects_stats):
     print("Creating model diagnostics")
 
     pyjags_data = az.from_pyjags(jags_output)
     pyjags_diagnostics = az.summary(pyjags_data["posterior"][MODEL_PARAMETERS])
+    for label, stats in fixed_effects_stats.items():
+        pyjags_diagnostics.loc[label] = stats
 
     return pyjags_diagnostics
 
@@ -293,7 +306,7 @@ def assign_probabilities(df_polys, df_adhoc, df_cameratrap, df_signsurvey):
 
     # runs the JAGS model, adjusting for burn-in period and total iterations (predetermined)
     jags_output = run_jags_model(jags_data_formatted=jags_data_formatted)
-    jags_diagnostics = jags_parameter_diagnostics(jags_output)
+    diagnostics = parameter_diagnostics(jags_output, jags_data_formatted[5])
 
     # processes posterior output to desired output format with probabilities and effort as integers
     # output dataframe includes: poly_id, biome, country, known_occ, only_ah, surveyed, phi, effort
@@ -302,9 +315,13 @@ def assign_probabilities(df_polys, df_adhoc, df_cameratrap, df_signsurvey):
     )
 
     model_metadata = {
-        "diagnostics": jags_diagnostics,
-        "ordered_unique_biomes": pd.DataFrame(jags_data_formatted[3], columns=['biome_code']),
-        "ordered_unique_countries": pd.DataFrame(jags_data_formatted[4], columns=['country_code']),
+        "diagnostics": diagnostics,
+        "ordered_unique_biomes": pd.DataFrame(
+            jags_data_formatted[3], columns=["biome_code"]
+        ),
+        "ordered_unique_countries": pd.DataFrame(
+            jags_data_formatted[4], columns=["country_code"]
+        ),
     }
 
     return jags_processed, model_metadata
