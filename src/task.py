@@ -535,6 +535,7 @@ class SCLClassification(SCLTask):
         scl_scored = self.inner_join(
             self.scl, scl_polys_probabilities, SCLPOLY_ID, SCLPOLY_ID
         )
+        self.export_fc_ee(scl_scored, "scl_scored")
 
         scl_species, scl_species_fragment = self.dissolve(
             scl_scored, "scl_species", "scl_fragment_historical_presence"
