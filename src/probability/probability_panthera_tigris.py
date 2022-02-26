@@ -281,8 +281,8 @@ def jags_post_process(jags_output, df_poly_detections):
     out = pd.DataFrame(
         {
             SCLPOLY_ID: df_poly_detections[SCLPOLY_ID],
-            BIOME: df_poly_detections[BIOME],
-            COUNTRY: df_poly_detections[COUNTRY],
+            "biome_index": df_poly_detections[BIOME],
+            "country_index": df_poly_detections[COUNTRY],
             "known_occ": df_poly_detections["known_occ"],
             "only_ah": df_poly_detections["only_ah"],
             "surveyed": df_poly_detections["surveyed"],

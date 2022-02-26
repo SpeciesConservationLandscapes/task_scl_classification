@@ -459,15 +459,11 @@ class SCLClassification(SCLTask):
             ee.FeatureCollection(dissolved_list.map(_item_to_classified_feature))
             .reduceToImage(["lstype"], ee.Reducer.first())
             .setDefaultProjection(
-                scale=450,
-                crs=self.crs,  # this could probably be anything <500
+                scale=450, crs=self.crs  # this could probably be anything <500
             )
             .unmask(0)
             .reduceResolution(ee.Reducer.min())
-            .reproject(
-                scale=self.scale,
-                crs=self.crs,
-            )
+            .reproject(scale=self.scale, crs=self.crs)
             .selfMask()
             .reduceToVectors(
                 geometry=ee.Geometry.Polygon(self.extent),
