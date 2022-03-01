@@ -47,6 +47,9 @@ class SCLClassification(SCLTask):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.save_intermediate = (
+            kwargs.get("intermediate") or os.environ.get("intermediate") or False
+        )
         self.use_cache = kwargs.get("use_cache") or os.environ.get("use_cache") or False
 
         try:
@@ -322,9 +325,12 @@ class SCLClassification(SCLTask):
                     f")"
                 )
                 self._df_adhoc = self._get_df(query)
+
                 print("zonify adhoc")
-                self._df_adhoc = self.zonify(self._df_adhoc)
-                # self._df_adhoc = self.zonify(self._df_adhoc, "scratch/adhoc")
+                savefc = None
+                if self.save_intermediate:
+                    savefc = "obs/adhoc"
+                self._df_adhoc = self.zonify(self._df_adhoc, savefc)
                 self._df_adhoc = self._df_adhoc.drop([POINT_LOC, GRIDCELL_LOC], axis=1)
             # self._df_adhoc.set_index(MASTER_CELL, inplace=True)
 
@@ -357,9 +363,6 @@ class SCLClassification(SCLTask):
                     f")"
                 )
                 df_ct_dep = self._get_df(query)
-                print("zonify camera trap deployments")
-                df_ct_dep = self.zonify(df_ct_dep)
-                # df_ct_dep = self.zonify(df_ct_dep, "scratch/ct")
                 df_ct_dep.set_index("CameraTrapDeploymentID", inplace=True)
 
                 query = (
@@ -395,6 +398,13 @@ class SCLClassification(SCLTask):
                 )
                 self._df_ct[CT_DAYS_DETECTED].fillna(0, inplace=True)
                 self._df_ct.rename(columns={"UniqueID_x": UNIQUE_ID}, inplace=True)
+
+                print("zonify camera trap deployments")
+                savefc = None
+                if self.save_intermediate:
+                    savefc = "obs/ct"
+                self._df_ct = self.zonify(self._df_ct, savefc)
+
                 self._df_ct = self._df_ct[
                     [
                         UNIQUE_ID,
@@ -433,9 +443,12 @@ class SCLClassification(SCLTask):
                     f"AND StartDate <= Cast('{self.taskdate}' AS datetime) "
                 )
                 self._df_ss = self._get_df(query)
+
                 print("zonify sign survey")
-                self._df_ss = self.zonify(self._df_ss)
-                # self._df_ss = self.zonify(self._df_ss, "scratch/ss")
+                savefc = None
+                if self.save_intermediate:
+                    savefc = "obs/ss"
+                self._df_ss = self.zonify(self._df_ss, savefc)
                 self._df_ss = self._df_ss.drop([POINT_LOC, GRIDCELL_LOC], axis=1)
             # self._df_ss.set_index(MASTER_CELL, inplace=True)
 
@@ -531,7 +544,8 @@ class SCLClassification(SCLTask):
         scl_scored = self.inner_join(
             self.scl, scl_polys_probabilities, SCLPOLY_ID, SCLPOLY_ID
         )
-        self.export_fc_ee(scl_scored, "scl_scored")
+        if self.save_intermediate:
+            self.export_fc_ee(scl_scored, "pothab/scl_scored")
 
         scl_species, scl_species_fragment = self.dissolve(
             scl_scored, "scl_species", "scl_fragment_historical_presence"
@@ -579,6 +593,12 @@ if __name__ == "__main__":
     parser.add_argument("-s", "--species")
     parser.add_argument("-u", "--use-cache", action="store_true")
     parser.add_argument("--scenario")
+    parser.add_argument(
+        "-i",
+        "--intermediate",
+        action="store_true",
+        help="Store intermediate data used in producing results",
+    )
     parser.add_argument(
         "--overwrite",
         action="store_true",
