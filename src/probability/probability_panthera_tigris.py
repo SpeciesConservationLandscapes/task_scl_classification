@@ -62,7 +62,7 @@ def create_df(cam, sign, df_adhoc, df_poly):
         + df_poly_detections["sign"]
         + df_poly_detections["cam"]
     )
-    df_poly_detections["known_occ"] = np.where(known_occ > 0, 1, 0)
+    df_poly_detections["known_occ"] = np.where(known_occ >= 1, 1, 0)
     # If the sum of known_occ, replicates and days is > 0, assign 1 else 0
     surveyed = (
         df_poly_detections["known_occ"]
