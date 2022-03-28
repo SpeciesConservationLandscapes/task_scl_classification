@@ -491,8 +491,13 @@ class SCLClassification(SCLTask):
             )
         )
 
-        dissolved_cores = dissolved_polys.filter(ee.Filter.eq("lstype", 1))
-        dissolved_fragments = dissolved_polys.filter(ee.Filter.eq("lstype", 2))
+        # assign ids to final landscape polygons; TODO: persist landscape identity across time
+        dissolved_cores = self.assign_fc_ids(
+            dissolved_polys.filter(ee.Filter.eq("lstype", 1)), DISSOLVED_POLY_ID
+        )
+        dissolved_fragments = self.assign_fc_ids(
+            dissolved_polys.filter(ee.Filter.eq("lstype", 2)), DISSOLVED_POLY_ID
+        )
 
         return dissolved_cores, dissolved_fragments
 
@@ -504,6 +509,7 @@ class SCLClassification(SCLTask):
             return ee.Feature(
                 geom,
                 {
+                    DISSOLVED_POLY_ID: feat.get(DISSOLVED_POLY_ID),
                     HABITAT_AREA: ee.Number(eph).round(),
                     CONNECTED_HABITAT_AREA: ee.Number(ceph).round(),
                 },
