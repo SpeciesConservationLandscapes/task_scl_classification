@@ -38,3 +38,4 @@ PROBABILITY = "phi"
 PHI0 = "phi0"
 EFFORT = "effort"
 RANGE = "range"
+ADHOC_COUNT_THRESHOLD = 2

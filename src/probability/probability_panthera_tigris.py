@@ -55,13 +55,14 @@ def create_df(cam, sign, df_adhoc, df_poly):
     df_poly_detections = pd.merge(df_poly, df_detections, on=SCLPOLY_ID, how="left")
     df_poly_detections = df_poly_detections.fillna(0)
 
-    # If the sum of adhoc, sign and cam is > 0, assign known_occ a 1, else 0
+    # Assign known_occ 1/0 based on sum of SS, CT, and ad hoc weighted by a
+    # threshold representing how many observations should count as definitive presence
     known_occ = (
-        df_poly_detections["adhoc"]
+        (df_poly_detections["adhoc"] * 1 / ADHOC_COUNT_THRESHOLD)
         + df_poly_detections["sign"]
         + df_poly_detections["cam"]
     )
-    df_poly_detections["known_occ"] = np.where(known_occ > 0, 1, 0)
+    df_poly_detections["known_occ"] = np.where(known_occ >= 1, 1, 0)
     # If the sum of known_occ, replicates and days is > 0, assign 1 else 0
     surveyed = (
         df_poly_detections["known_occ"]
