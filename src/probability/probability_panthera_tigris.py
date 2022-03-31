@@ -270,6 +270,8 @@ def jags_post_process(jags_output, df_poly_detections):
     for i in range(len(jags_output[PHI0])):
         phi0_mean.append(jags_output[PHI0][i].flatten().mean())
 
+    phi0_mean_round = [round(100 * i) for i in phi0_mean]
+
     effort = [0] * len(jags_output[PROBABILITY])
     for i in range(len(jags_output[PROBABILITY])):
         if (
@@ -287,6 +289,7 @@ def jags_post_process(jags_output, df_poly_detections):
             "only_ah": df_poly_detections["only_ah"],
             "surveyed": df_poly_detections["surveyed"],
             PROBABILITY: phi_mean_round,
+            "unconditional_prob": phi0_mean_round,
             EFFORT: effort,
         }
     )
