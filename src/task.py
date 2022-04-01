@@ -260,6 +260,7 @@ class SCLClassification(SCLTask):
         return df
 
     def _get_blob(self, file_name):
+        # TODO: increment name if it exists already like we do for ee export functions
         return f"prob/{self.species}/{self.scenario}/{self.taskdate}/{file_name}"
 
     def fc2df(self, featurecollection, columns=None):
