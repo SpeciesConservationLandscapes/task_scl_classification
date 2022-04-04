@@ -20,6 +20,7 @@ EE_ID_LABEL = "id"
 MASTER_GRID = "mastergrid"
 MASTER_CELL = "mastergridcell"
 SCLPOLY_ID = "poly_id"
+DISSOLVED_POLY_ID = "dissolved_poly_id"
 PROTECTED = "protected"
 ZONIFY_DF_COLUMNS = [
     UNIQUE_ID,
