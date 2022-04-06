@@ -318,11 +318,14 @@ class SCLClassification(SCLTask):
                     f"{DENSITY} "
                     f"FROM dbo.vw_CI_AdHocObservation "
                     f"WHERE ("
+                        # either study end was within 5 years prior to taskdate
                     f"  DATEDIFF(YEAR, EndObservationDate, '{self.taskdate}') <= {self.inputs['obs_adhoc']['maxage']}"
                     f"  AND EndObservationDate <= Cast('{self.taskdate}' AS datetime)"
                     f") OR ("
-                    f"  DATEDIFF(YEAR, StartObservationDate, '{self.taskdate}') <= {self.inputs['obs_adhoc']['maxage']}"
-                    f"  AND StartObservationDate <= Cast('{self.taskdate}' AS datetime)"
+                        # or taskdate simply falls between study start and end (we don't know 
+                        # actual observation date but it could be within 5 years prior)
+                    f"  StartObservationDate <= Cast('{self.taskdate}' AS datetime)"
+                    f"  AND EndObservationDate >= Cast('{self.taskdate}' AS datetime)"
                     f")"
                 )
                 self._df_adhoc = self._get_df(query)
@@ -355,12 +358,13 @@ class SCLClassification(SCLTask):
                     f"PickupDatetime AS {DATE}, "
                     f"{CT_DAYS_OPERATING} "
                     f"FROM dbo.vw_CI_CameraTrapDeployment "
+                    # Same maxage / date range logic as for ad hoc
                     f"WHERE ("
                     f"  DATEDIFF(YEAR, PickupDatetime, '{self.taskdate}') <= {self.inputs['obs_ct']['maxage']}"
                     f"  AND PickupDatetime <= Cast('{self.taskdate}' AS datetime)"
                     f") OR ("
-                    f"  DATEDIFF(YEAR, DeploymentDatetime, '{self.taskdate}') <= {self.inputs['obs_ct']['maxage']}"
-                    f"  AND DeploymentDatetime <= Cast('{self.taskdate}' AS datetime)"
+                    f"  DeploymentDatetime <= Cast('{self.taskdate}' AS datetime)"
+                    f"  AND PickupDatetime >= Cast('{self.taskdate}' AS datetime)"
                     f")"
                 )
                 df_ct_dep = self._get_df(query)
