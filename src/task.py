@@ -194,7 +194,7 @@ class SCLClassification(SCLTask):
 
         obs_df = self._prep_obs_df(df)
         if not obs_df.empty:
-            obs_features = self.df2fc(obs_df[["geom", UNIQUE_ID]]).filterBounds(self.geofilter)
+            obs_features = self.df2fc(obs_df).filterBounds(self.geofilter)
 
             polyid_image = self.scl.reduceToImage([SCLPOLY_ID], ee.Reducer.mode())
             gridcells = polyid_image.reduceRegions(
@@ -539,56 +539,55 @@ class SCLClassification(SCLTask):
         return df_counts.index.is_unique
 
     def calc(self):
-        print(self.df_adhoc)
-        # prob_columns = [SCLPOLY_ID, BIOME, COUNTRY, HABITAT_AREA, "pa_proportion"]
-        # df_scl_polys = self.fc2df(self.scl, columns=prob_columns)
-        # # df_scl_polys.to_csv("scl_polys.csv")
-        # # df_scl_polys = pd.read_csv("scl_polys.csv")
-        #
-        # # print(self.is_gridcell_unique(self.df_adhoc))
-        # # print(self.is_gridcell_unique(self.df_cameratrap))
-        # # print(self.is_gridcell_unique(self.df_signsurvey))
-        #
-        # df_scl_polys_probabilities, metadata = assign_probabilities(
-        #     df_polys=df_scl_polys,
-        #     df_adhoc=self.df_adhoc,
-        #     df_cameratrap=self.df_cameratrap,
-        #     df_signsurvey=self.df_signsurvey,
-        # )
-        # # df_scl_polys_probabilities = pd.read_csv("df_scl_polys_probabilities.csv", index_col="poly_id")
-        # # df_scl_polys_probabilities.to_csv("df_scl_polys_probabilities.csv")
-        # scl_polys_probabilities = self.df2fc(df_scl_polys_probabilities)
-        #
-        # scl_scored = self.inner_join(
-        #     self.scl, scl_polys_probabilities, SCLPOLY_ID, SCLPOLY_ID
-        # )
-        # if self.save_intermediate:
-        #     self.export_fc_ee(scl_scored, "pothab/scl_scored")
+        prob_columns = [SCLPOLY_ID, BIOME, COUNTRY, HABITAT_AREA, "pa_proportion"]
+        df_scl_polys = self.fc2df(self.scl, columns=prob_columns)
+        # df_scl_polys.to_csv("scl_polys.csv")
+        # df_scl_polys = pd.read_csv("scl_polys.csv")
 
-        # scl_species, scl_species_fragment = self.dissolve(
-        #     scl_scored, "scl_species", "scl_fragment_historical_presence"
-        # )
-        # scl_survey, scl_survey_fragment = self.dissolve(
-        #     scl_scored, "scl_survey", "scl_fragment_historical_nopresence"
-        # )
-        # scl_restoration, scl_rest_frag = self.dissolve(
-        #     scl_scored, "scl_restoration", "scl_fragment_extirpated"
-        # )
-        #
-        # self.poly_export(self.reattribute(scl_species), "scl_species")
-        # self.poly_export(self.reattribute(scl_species_fragment), "scl_species_fragment")
-        # self.poly_export(self.reattribute(scl_survey), "scl_survey")
-        # self.poly_export(self.reattribute(scl_survey_fragment), "scl_survey_fragment")
-        # self.poly_export(self.reattribute(scl_restoration), "scl_restoration")
-        # self.poly_export(self.reattribute(scl_rest_frag), "scl_restoration_fragment")
-        #
-        # self.df2storage(metadata["diagnostics"], f"pyjags_diagnostics_{self.taskdate}")
-        # self.df2storage(
-        #     metadata["ordered_unique_biomes"], f"biome_codes_{self.taskdate}"
-        # )
-        # self.df2storage(
-        #     metadata["ordered_unique_countries"], f"country_codes_{self.taskdate}"
-        # )
+        # print(self.is_gridcell_unique(self.df_adhoc))
+        # print(self.is_gridcell_unique(self.df_cameratrap))
+        # print(self.is_gridcell_unique(self.df_signsurvey))
+
+        df_scl_polys_probabilities, metadata = assign_probabilities(
+            df_polys=df_scl_polys,
+            df_adhoc=self.df_adhoc,
+            df_cameratrap=self.df_cameratrap,
+            df_signsurvey=self.df_signsurvey,
+        )
+        # df_scl_polys_probabilities = pd.read_csv("df_scl_polys_probabilities.csv", index_col="poly_id")
+        # df_scl_polys_probabilities.to_csv("df_scl_polys_probabilities.csv")
+        scl_polys_probabilities = self.df2fc(df_scl_polys_probabilities)
+
+        scl_scored = self.inner_join(
+            self.scl, scl_polys_probabilities, SCLPOLY_ID, SCLPOLY_ID
+        )
+        if self.save_intermediate:
+            self.export_fc_ee(scl_scored, "pothab/scl_scored")
+
+        scl_species, scl_species_fragment = self.dissolve(
+            scl_scored, "scl_species", "scl_fragment_historical_presence"
+        )
+        scl_survey, scl_survey_fragment = self.dissolve(
+            scl_scored, "scl_survey", "scl_fragment_historical_nopresence"
+        )
+        scl_restoration, scl_rest_frag = self.dissolve(
+            scl_scored, "scl_restoration", "scl_fragment_extirpated"
+        )
+
+        self.poly_export(self.reattribute(scl_species), "scl_species")
+        self.poly_export(self.reattribute(scl_species_fragment), "scl_species_fragment")
+        self.poly_export(self.reattribute(scl_survey), "scl_survey")
+        self.poly_export(self.reattribute(scl_survey_fragment), "scl_survey_fragment")
+        self.poly_export(self.reattribute(scl_restoration), "scl_restoration")
+        self.poly_export(self.reattribute(scl_rest_frag), "scl_restoration_fragment")
+
+        self.df2storage(metadata["diagnostics"], f"pyjags_diagnostics_{self.taskdate}")
+        self.df2storage(
+            metadata["ordered_unique_biomes"], f"biome_codes_{self.taskdate}"
+        )
+        self.df2storage(
+            metadata["ordered_unique_countries"], f"country_codes_{self.taskdate}"
+        )
 
     def check_inputs(self):
         super().check_inputs()
