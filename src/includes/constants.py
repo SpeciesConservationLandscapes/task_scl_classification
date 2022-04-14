@@ -28,6 +28,7 @@ ZONIFY_DF_COLUMNS = [
     MASTER_CELL,
     SCLPOLY_ID,
     PROTECTED,
+    ".geo"
 ]
 
 # labels used in classification

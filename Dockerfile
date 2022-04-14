@@ -16,7 +16,8 @@ RUN pip install git+https://github.com/SpeciesConservationLandscapes/task_base.g
     && pip install pandas==1.3.2 \
     && pip install pyodbc==4.0.32 \
     && pip install pyjags==1.3.7 \
-    && pip install arviz==0.11.4
+    && pip install arviz==0.11.4 \
+    && pip install geomet==0.3.0
 
 WORKDIR /app
 COPY $PWD/src .
