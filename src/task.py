@@ -74,9 +74,7 @@ class SCLClassification(SCLTask):
         self.scl_image, _ = self.get_most_recent_image(
             ee.ImageCollection(self.inputs["scl_image"]["ee_path"])
         )
-        self.geofilter = ee.Geometry.MultiPolygon(
-            self.aoi, proj=self.crs, geodesic=False
-        )
+        self.geofilter = self.historical_range_fc.geometry()
         self.zones = ee.FeatureCollection(self.inputs["zones"]["ee_path"])
         self.gridcells = ee.FeatureCollection(
             self.inputs["gridcells"]["ee_path"]
