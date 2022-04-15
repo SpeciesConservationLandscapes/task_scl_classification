@@ -170,12 +170,10 @@ class SCLClassification(SCLTask):
 
     def _prep_obs_df(self, df):
         # df with point geom if we have one, polygon otherwise, or drop if neither
-        obs_df = df[[POINT_LOC, GRIDCELL_LOC, UNIQUE_ID]]
-        obs_df = obs_df.dropna(subset=[POINT_LOC, GRIDCELL_LOC], how="all")
-        obs_df = obs_df.assign(geom=obs_df[POINT_LOC])
-        obs_df["geom"].loc[obs_df["geom"].isna()] = obs_df[GRIDCELL_LOC]
-        obs_df = obs_df[["geom", UNIQUE_ID]]
+        obs_df = df.dropna(subset=[POINT_LOC, GRIDCELL_LOC], how="all")
+        obs_df["geom"] = obs_df[POINT_LOC].fillna(obs_df[GRIDCELL_LOC])
         obs_df.set_index(UNIQUE_ID, inplace=True)
+        obs_df = obs_df.drop([POINT_LOC, GRIDCELL_LOC], axis=1)
         return obs_df
 
     def zonify(self, df, savefc=None):
@@ -234,8 +232,6 @@ class SCLClassification(SCLTask):
                 gridded_obs_features, gridcells, MASTER_CELL, EE_ID_LABEL
             )
 
-            if savefc:
-                self.export_fc_ee(return_obs_features, savefc)
             master_grid_df = self.fc2df(return_obs_features, ZONIFY_DF_COLUMNS)
 
         df = pd.merge(left=df, right=master_grid_df)
@@ -257,6 +253,10 @@ class SCLClassification(SCLTask):
         #     & (df[SCLPOLY_ID] != self.EE_NODATA)
         # ]
 
+        if savefc:
+            dfexport = self._prep_obs_df(df)
+            obs_export = self.df2fc(dfexport)
+            self.export_fc_ee(obs_export, savefc)
         return df
 
     def _get_blob(self, file_name):
@@ -312,18 +312,19 @@ class SCLClassification(SCLTask):
             else:
                 query = (
                     f"SELECT {UNIQUE_ID}, "
+                    f"AdHocObservationID, "
                     f"{POINT_LOC}, "
                     f"{GRIDCELL_LOC}, "
                     f"EndObservationDate AS {DATE}, "
                     f"{DENSITY} "
                     f"FROM dbo.vw_CI_AdHocObservation "
                     f"WHERE ("
-                        # either study end was within 5 years prior to taskdate
+                    # either study end was within 5 years prior to taskdate
                     f"  DATEDIFF(YEAR, EndObservationDate, '{self.taskdate}') <= {self.inputs['obs_adhoc']['maxage']}"
                     f"  AND EndObservationDate <= Cast('{self.taskdate}' AS datetime)"
                     f") OR ("
-                        # or taskdate simply falls between study start and end (we don't know 
-                        # actual observation date but it could be within 5 years prior)
+                    # or taskdate simply falls between study start and end (we don't know
+                    # actual observation date but it could be within 5 years prior)
                     f"  StartObservationDate <= Cast('{self.taskdate}' AS datetime)"
                     f"  AND EndObservationDate >= Cast('{self.taskdate}' AS datetime)"
                     f")"
@@ -438,6 +439,7 @@ class SCLClassification(SCLTask):
             else:
                 query = (
                     f"SELECT {UNIQUE_ID}, "
+                    f"SignSurveyID, "
                     f"{POINT_LOC}, "
                     f"{GRIDCELL_LOC}, "
                     f"StartDate AS {DATE}, "
