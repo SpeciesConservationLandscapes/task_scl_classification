@@ -253,8 +253,9 @@ class SCLClassification(SCLTask):
 
         if savefc:
             dfexport = self._prep_obs_df(df)
-            obs_export = self.df2fc(dfexport)
-            self.export_fc_ee(obs_export, savefc)
+            if not dfexport.empty:
+                obs_export = self.df2fc(dfexport)
+                self.export_fc_ee(obs_export, savefc)
         return df
 
     def _get_blob(self, file_name):
