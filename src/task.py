@@ -232,7 +232,8 @@ class SCLClassification(SCLTask):
 
             master_grid_df = self.fc2df(return_obs_features, ZONIFY_DF_COLUMNS)
 
-        df = pd.merge(left=df, right=master_grid_df)
+        df = df.reset_index()
+        df = pd.merge(left=df, right=master_grid_df, left_on=UNIQUE_ID, right_on=UNIQUE_ID)
 
         # save out non-intersecting observations
         # df_nonintersections = df[
