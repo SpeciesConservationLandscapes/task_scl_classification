@@ -68,9 +68,10 @@ class SCLClassification(SCLTask):
 
         self._df_adhoc = self._df_ct = self._df_ss = None
         self.fc_csvs = []
-        self.scl, _ = self.get_most_recent_featurecollection(
-            self.inputs["scl"]["ee_path"]
-        )
+        # self.scl, _ = self.get_most_recent_featurecollection(
+        #     self.inputs["scl"]["ee_path"]
+        # )
+        self.scl = ee.FeatureCollection("projects/SCL/v1/Panthera_tigris/canonical/pothab/scl_polys/scl_polys_2020-01-01")
         self.scl_image, _ = self.get_most_recent_image(
             ee.ImageCollection(self.inputs["scl_image"]["ee_path"])
         )
@@ -540,9 +541,9 @@ class SCLClassification(SCLTask):
 
     def calc(self):
         prob_columns = [SCLPOLY_ID, BIOME, COUNTRY, HABITAT_AREA, "pa_proportion"]
-        df_scl_polys = self.fc2df(self.scl, columns=prob_columns)
+        # df_scl_polys = self.fc2df(self.scl, columns=prob_columns)
         # df_scl_polys.to_csv("scl_polys.csv")
-        # df_scl_polys = pd.read_csv("scl_polys.csv")
+        df_scl_polys = pd.read_csv("scl_polys.csv")
 
         # print(self.is_gridcell_unique(self.df_adhoc))
         # print(self.is_gridcell_unique(self.df_cameratrap))
@@ -581,13 +582,13 @@ class SCLClassification(SCLTask):
         self.poly_export(self.reattribute(scl_restoration), "scl_restoration")
         self.poly_export(self.reattribute(scl_rest_frag), "scl_restoration_fragment")
 
-        self.df2storage(metadata["diagnostics"], f"pyjags_diagnostics_{self.taskdate}")
-        self.df2storage(
-            metadata["ordered_unique_biomes"], f"biome_codes_{self.taskdate}"
-        )
-        self.df2storage(
-            metadata["ordered_unique_countries"], f"country_codes_{self.taskdate}"
-        )
+        # self.df2storage(metadata["diagnostics"], f"pyjags_diagnostics_{self.taskdate}")
+        # self.df2storage(
+        #     metadata["ordered_unique_biomes"], f"biome_codes_{self.taskdate}"
+        # )
+        # self.df2storage(
+        #     metadata["ordered_unique_countries"], f"country_codes_{self.taskdate}"
+        # )
 
     def check_inputs(self):
         super().check_inputs()
