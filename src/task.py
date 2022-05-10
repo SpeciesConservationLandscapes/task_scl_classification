@@ -156,13 +156,7 @@ class SCLClassification(SCLTask):
         self.export_fc_ee(polys, path)
 
     def _get_df(self, query):
-        _scenario_clause = (
-            f"AND ScenarioName IS NULL OR ScenarioName = '{self.CANONICAL}'"
-        )
-        if self.scenario and self.scenario != self.CANONICAL:
-            _scenario_clause = f"AND ScenarioName = '{self.scenario}'"
-
-        query = f"{query} {_scenario_clause}"
+        query = f"{query} AND ScenarioName = '{self.scenario}'"
         obsconn = pyodbc.connect(self._obsconn_str)
         df = pd.read_sql(query, obsconn)
         return df
