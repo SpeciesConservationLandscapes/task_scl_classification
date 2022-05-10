@@ -76,9 +76,7 @@ class SCLClassification(SCLTask):
         )
         self.geofilter = self.historical_range_fc.geometry()
         self.zones = ee.FeatureCollection(self.inputs["zones"]["ee_path"])
-        self.gridcells = ee.FeatureCollection(
-            self.inputs["gridcells"]["ee_path"]
-        ).filterBounds(self.geofilter)
+        self.gridcells = ee.FeatureCollection(self.inputs["gridcells"]["ee_path"])
         self.biomes = self.ecoregions.reduceToImage(["BIOME_NUM"], ee.Reducer.mode())
         self.intersects = ee.Filter.intersects(".geo", None, ".geo")
 
@@ -192,7 +190,7 @@ class SCLClassification(SCLTask):
 
         obs_df = self._prep_obs_df(df)
         if not obs_df.empty:
-            obs_features = self.df2fc(obs_df).filterBounds(self.geofilter)
+            obs_features = self.df2fc(obs_df)
 
             polyid_image = self.scl.reduceToImage([SCLPOLY_ID], ee.Reducer.mode())
             gridcells = polyid_image.reduceRegions(
@@ -215,16 +213,22 @@ class SCLClassification(SCLTask):
                 .rename([MASTER_GRID, MASTER_CELL, PROTECTED])
             )
 
-            gridded_obs_features = attrib_image.reduceRegions(
-                collection=obs_features,
-                reducer=ee.Reducer.mode()
-                .forEach([MASTER_GRID])
-                .combine(
-                    ee.Reducer.frequencyHistogram().forEach([MASTER_CELL, PROTECTED])
-                ),
-                scale=self.scale,
-                crs=self.crs,
-            ).map(_max_frequency)
+            gridded_obs_features = (
+                attrib_image.reduceRegions(
+                    collection=obs_features,
+                    reducer=ee.Reducer.mode()
+                    .forEach([MASTER_GRID])
+                    .combine(
+                        ee.Reducer.frequencyHistogram().forEach(
+                            [MASTER_CELL, PROTECTED]
+                        )
+                    ),
+                    scale=self.scale,
+                    crs=self.crs,
+                )
+                .map(_max_frequency)
+                .filter(ee.Filter.neq(SCLPOLY_ID, None))
+            )
 
             return_obs_features = self.inner_join(
                 gridded_obs_features, gridcells, MASTER_CELL, EE_ID_LABEL
@@ -233,7 +237,9 @@ class SCLClassification(SCLTask):
             master_grid_df = self.fc2df(return_obs_features, ZONIFY_DF_COLUMNS)
 
         df = df.reset_index()
-        df = pd.merge(left=df, right=master_grid_df, left_on=UNIQUE_ID, right_on=UNIQUE_ID)
+        df = pd.merge(
+            left=df, right=master_grid_df, left_on=UNIQUE_ID, right_on=UNIQUE_ID
+        )
 
         # save out non-intersecting observations
         # df_nonintersections = df[
