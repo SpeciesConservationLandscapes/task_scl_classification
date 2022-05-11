@@ -182,8 +182,10 @@ class SCLClassification(SCLTask):
             return ee.Number.parse(hist.keys().get(index)).toLong()
 
         def _max_frequency(feat):
+            grid_test = feat.get(MASTER_GRID)
             hist_zone = ee.Dictionary(feat.get(MASTER_CELL))
-            max_zone = _get_max(hist_zone)
+
+            max_zone = ee.Number(ee.Algorithms.If(grid_test, _get_max(hist_zone), None))
             hist_pa = ee.Dictionary(feat.get(PROTECTED))
             max_pa = _get_max(hist_pa)
             return feat.set(MASTER_CELL, max_zone, PROTECTED, max_pa)
@@ -227,7 +229,7 @@ class SCLClassification(SCLTask):
                     crs=self.crs,
                 )
                 .map(_max_frequency)
-                .filter(ee.Filter.neq(SCLPOLY_ID, None))
+                .filter(ee.Filter.neq(MASTER_CELL, None))
             )
 
             return_obs_features = self.inner_join(
