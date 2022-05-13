@@ -68,14 +68,12 @@ class SCLClassification(SCLTask):
 
         self._df_adhoc = self._df_ct = self._df_ss = None
         self.fc_csvs = []
-        # self.scl, _ = self.get_most_recent_featurecollection(
-        #     self.inputs["scl"]["ee_path"]
-        # )
-        self.scl = ee.FeatureCollection("projects/SCL/v1/Panthera_tigris/canonical/pothab/scl_polys/scl_polys_2020-01-01")
+        self.scl, _ = self.get_most_recent_featurecollection(
+            self.inputs["scl"]["ee_path"]
+        )
         self.scl_image, _ = self.get_most_recent_image(
             ee.ImageCollection(self.inputs["scl_image"]["ee_path"])
         )
-        self.geofilter = self.historical_range_fc.geometry()
         self.zones = ee.FeatureCollection(self.inputs["zones"]["ee_path"])
         self.gridcells = ee.FeatureCollection(self.inputs["gridcells"]["ee_path"])
         self.biomes = self.ecoregions.reduceToImage(["BIOME_NUM"], ee.Reducer.mode())
@@ -178,7 +176,9 @@ class SCLClassification(SCLTask):
 
         def _max_frequency(feat):
             hist_zone = ee.Dictionary(feat.get(MASTER_CELL))
-            max_zone = _get_max(hist_zone)
+            max_zone = ee.Number(
+                ee.Algorithms.If(feat.get(MASTER_GRID), _get_max(hist_zone), None)
+            )
             hist_pa = ee.Dictionary(feat.get(PROTECTED))
             max_pa = _get_max(hist_pa)
             return feat.set(MASTER_CELL, max_zone, PROTECTED, max_pa)
@@ -222,7 +222,7 @@ class SCLClassification(SCLTask):
                     crs=self.crs,
                 )
                 .map(_max_frequency)
-                .filter(ee.Filter.neq(SCLPOLY_ID, None))
+                .filter(ee.Filter.neq(MASTER_CELL, None))
             )
 
             return_obs_features = self.inner_join(
@@ -541,9 +541,9 @@ class SCLClassification(SCLTask):
 
     def calc(self):
         prob_columns = [SCLPOLY_ID, BIOME, COUNTRY, HABITAT_AREA, "pa_proportion"]
-        # df_scl_polys = self.fc2df(self.scl, columns=prob_columns)
-        # df_scl_polys.to_csv("scl_polys.csv")
-        df_scl_polys = pd.read_csv("scl_polys.csv")
+        df_scl_polys = self.fc2df(self.scl, columns=prob_columns)
+        df_scl_polys.to_csv("scl_polys.csv")
+        # df_scl_polys = pd.read_csv("scl_polys.csv")
 
         # print(self.is_gridcell_unique(self.df_adhoc))
         # print(self.is_gridcell_unique(self.df_cameratrap))
