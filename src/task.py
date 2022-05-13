@@ -582,13 +582,13 @@ class SCLClassification(SCLTask):
         self.poly_export(self.reattribute(scl_restoration), "scl_restoration")
         self.poly_export(self.reattribute(scl_rest_frag), "scl_restoration_fragment")
 
-        # self.df2storage(metadata["diagnostics"], f"pyjags_diagnostics_{self.taskdate}")
-        # self.df2storage(
-        #     metadata["ordered_unique_biomes"], f"biome_codes_{self.taskdate}"
-        # )
-        # self.df2storage(
-        #     metadata["ordered_unique_countries"], f"country_codes_{self.taskdate}"
-        # )
+        self.df2storage(metadata["diagnostics"], f"pyjags_diagnostics_{self.taskdate}")
+        self.df2storage(
+            metadata["ordered_unique_biomes"], f"biome_codes_{self.taskdate}"
+        )
+        self.df2storage(
+            metadata["ordered_unique_countries"], f"country_codes_{self.taskdate}"
+        )
 
     def check_inputs(self):
         super().check_inputs()
