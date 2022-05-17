@@ -1,7 +1,7 @@
 BUCKET = "scl-pipeline"
 ZONES = "Zone"  # Attribute used by both zones and gridcells
 BIOME = "biome"
-COUNTRY = "country"
+COUNTRY = "state"
 NODATA = -9999
 
 # data labels coming from sql

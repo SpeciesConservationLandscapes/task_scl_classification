@@ -74,11 +74,8 @@ class SCLClassification(SCLTask):
         self.scl_image, _ = self.get_most_recent_image(
             ee.ImageCollection(self.inputs["scl_image"]["ee_path"])
         )
-        self.geofilter = self.historical_range_fc.geometry()
         self.zones = ee.FeatureCollection(self.inputs["zones"]["ee_path"])
-        self.gridcells = ee.FeatureCollection(
-            self.inputs["gridcells"]["ee_path"]
-        ).filterBounds(self.geofilter)
+        self.gridcells = ee.FeatureCollection(self.inputs["gridcells"]["ee_path"])
         self.biomes = self.ecoregions.reduceToImage(["BIOME_NUM"], ee.Reducer.mode())
         self.intersects = ee.Filter.intersects(".geo", None, ".geo")
 
@@ -155,13 +152,7 @@ class SCLClassification(SCLTask):
         self.export_fc_ee(polys, path)
 
     def _get_df(self, query):
-        _scenario_clause = (
-            f"AND ScenarioName IS NULL OR ScenarioName = '{self.CANONICAL}'"
-        )
-        if self.scenario and self.scenario != self.CANONICAL:
-            _scenario_clause = f"AND ScenarioName = '{self.scenario}'"
-
-        query = f"{query} {_scenario_clause}"
+        query = f"{query} AND ScenarioName = '{self.scenario}'"
         obsconn = pyodbc.connect(self._obsconn_str)
         df = pd.read_sql(query, obsconn)
         return df
@@ -185,14 +176,16 @@ class SCLClassification(SCLTask):
 
         def _max_frequency(feat):
             hist_zone = ee.Dictionary(feat.get(MASTER_CELL))
-            max_zone = _get_max(hist_zone)
+            max_zone = ee.Number(
+                ee.Algorithms.If(feat.get(MASTER_GRID), _get_max(hist_zone), None)
+            )
             hist_pa = ee.Dictionary(feat.get(PROTECTED))
             max_pa = _get_max(hist_pa)
             return feat.set(MASTER_CELL, max_zone, PROTECTED, max_pa)
 
         obs_df = self._prep_obs_df(df)
         if not obs_df.empty:
-            obs_features = self.df2fc(obs_df).filterBounds(self.geofilter)
+            obs_features = self.df2fc(obs_df)
 
             polyid_image = self.scl.reduceToImage([SCLPOLY_ID], ee.Reducer.mode())
             gridcells = polyid_image.reduceRegions(
@@ -215,16 +208,22 @@ class SCLClassification(SCLTask):
                 .rename([MASTER_GRID, MASTER_CELL, PROTECTED])
             )
 
-            gridded_obs_features = attrib_image.reduceRegions(
-                collection=obs_features,
-                reducer=ee.Reducer.mode()
-                .forEach([MASTER_GRID])
-                .combine(
-                    ee.Reducer.frequencyHistogram().forEach([MASTER_CELL, PROTECTED])
-                ),
-                scale=self.scale,
-                crs=self.crs,
-            ).map(_max_frequency)
+            gridded_obs_features = (
+                attrib_image.reduceRegions(
+                    collection=obs_features,
+                    reducer=ee.Reducer.mode()
+                    .forEach([MASTER_GRID])
+                    .combine(
+                        ee.Reducer.frequencyHistogram().forEach(
+                            [MASTER_CELL, PROTECTED]
+                        )
+                    ),
+                    scale=self.scale,
+                    crs=self.crs,
+                )
+                .map(_max_frequency)
+                .filter(ee.Filter.neq(MASTER_CELL, None))
+            )
 
             return_obs_features = self.inner_join(
                 gridded_obs_features, gridcells, MASTER_CELL, EE_ID_LABEL
@@ -233,7 +232,9 @@ class SCLClassification(SCLTask):
             master_grid_df = self.fc2df(return_obs_features, ZONIFY_DF_COLUMNS)
 
         df = df.reset_index()
-        df = pd.merge(left=df, right=master_grid_df, left_on=UNIQUE_ID, right_on=UNIQUE_ID)
+        df = pd.merge(
+            left=df, right=master_grid_df, left_on=UNIQUE_ID, right_on=UNIQUE_ID
+        )
 
         # save out non-intersecting observations
         # df_nonintersections = df[
@@ -541,7 +542,7 @@ class SCLClassification(SCLTask):
     def calc(self):
         prob_columns = [SCLPOLY_ID, BIOME, COUNTRY, HABITAT_AREA, "pa_proportion"]
         df_scl_polys = self.fc2df(self.scl, columns=prob_columns)
-        # df_scl_polys.to_csv("scl_polys.csv")
+        df_scl_polys.to_csv("scl_polys.csv")
         # df_scl_polys = pd.read_csv("scl_polys.csv")
 
         # print(self.is_gridcell_unique(self.df_adhoc))
