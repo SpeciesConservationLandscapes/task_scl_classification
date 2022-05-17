@@ -133,3 +133,5 @@ dmypy.json
 *.csv
 
 src/archive/
+
+.DS_Store
