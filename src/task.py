@@ -94,6 +94,7 @@ class SCLClassification(SCLTask):
         self.biomes = self.ecoregions.reduceToImage(["BIOME_NUM"], ee.Reducer.mode())
         self.states = ee.FeatureCollection(self.inputs["states"]["ee_path"])
         self.intersects = ee.Filter.intersects(".geo", None, ".geo")
+        self.habitat_area_image = None
 
         self.scl_poly_filters = {
             "scl_species": ee.Filter.And(
@@ -274,7 +275,6 @@ class SCLClassification(SCLTask):
         obs_export = None
         dfexport = self._prep_obs_df(df)
         if not dfexport.empty:
-            print(dfexport)
             obs_export = self.df2fc(dfexport)
             if savefc:
                 self.export_fc_ee(obs_export, savefc)
@@ -530,7 +530,7 @@ class SCLClassification(SCLTask):
 
         return dissolved_cores, dissolved_fragments
 
-    def attribute_areas(self, polys, habitat_area_image):
+    def attribute_areas(self, polys):
         def _round(feat):
             geom = feat.geometry()
             eph = feat.get(HABITAT_AREA)
@@ -550,7 +550,7 @@ class SCLClassification(SCLTask):
 
         return (
             self.scl_image.select([HABITAT_AREA, CONNECTED_HABITAT_AREA])
-            .addBands(habitat_area_image)
+            .addBands(self.habitat_area_image)
             .reduceRegions(
                 collection=polys,
                 reducer=ee.Reducer.sum(),
@@ -567,6 +567,8 @@ class SCLClassification(SCLTask):
         return df_counts.index.is_unique
 
     def calc(self):
+        # printing these is necessary to create self.fc_ss, self.fc_ct, and self.fc_adhoc
+        # TODO: refactor so these prints are not necessary
         print(self.df_adhoc)
         print(self.df_signsurvey)
         print(self.df_cameratrap)
@@ -588,7 +590,7 @@ class SCLClassification(SCLTask):
         str_hab_area = area.updateMask(self.structural_habitat).rename(
             STRUCTURAL_HABITAT_AREA
         )
-        habitat_area = occupied_habitat.addBands(str_hab_area)
+        self.habitat_area_image = occupied_habitat.addBands(str_hab_area)
 
         prob_columns = [SCLPOLY_ID, BIOME, COUNTRY, HABITAT_AREA, "pa_proportion"]
         df_scl_polys = self.fc2df(self.scl, columns=prob_columns)
@@ -625,22 +627,17 @@ class SCLClassification(SCLTask):
             scl_scored, "scl_restoration", "scl_fragment_extirpated"
         )
 
-        self.poly_export(self.attribute_areas(scl_species, habitat_area), "scl_species")
+        self.poly_export(self.attribute_areas(scl_species), "scl_species")
         self.poly_export(
-            self.attribute_areas(scl_species_fragment, habitat_area),
-            "scl_species_fragment",
+            self.attribute_areas(scl_species_fragment), "scl_species_fragment",
         )
-        self.poly_export(self.attribute_areas(scl_survey, habitat_area), "scl_survey")
+        self.poly_export(self.attribute_areas(scl_survey), "scl_survey")
         self.poly_export(
-            self.attribute_areas(scl_survey_fragment, habitat_area),
-            "scl_survey_fragment",
+            self.attribute_areas(scl_survey_fragment), "scl_survey_fragment",
         )
+        self.poly_export(self.attribute_areas(scl_restoration), "scl_restoration")
         self.poly_export(
-            self.attribute_areas(scl_restoration, habitat_area), "scl_restoration"
-        )
-        self.poly_export(
-            self.attribute_areas(scl_rest_frag, habitat_area),
-            "scl_restoration_fragment",
+            self.attribute_areas(scl_rest_frag), "scl_restoration_fragment",
         )
 
         self.df2storage(metadata["diagnostics"], f"pyjags_diagnostics_{self.taskdate}")
