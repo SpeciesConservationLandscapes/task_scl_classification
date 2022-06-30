@@ -28,6 +28,11 @@ class SCLClassification(SCLTask):
             "ee_path": "scl_image_path",
             "maxage": 1 / 365,
         },
+        "structural_habitat": {
+            "ee_type": SCLTask.IMAGECOLLECTION,
+            "ee_path": "structural_habitat_path",
+            "maxage": 1 / 365,
+        },
         "zones": {
             "ee_type": SCLTask.FEATURECOLLECTION,
             "ee_path": "zones_path",
@@ -36,6 +41,11 @@ class SCLClassification(SCLTask):
         "gridcells": {
             "ee_type": SCLTask.FEATURECOLLECTION,
             "ee_path": "gridcells_path",
+            "static": True,
+        },
+        "states": {
+            "ee_type": SCLTask.FEATURECOLLECTION,
+            "ee_path": "projects/SCL/v1/source/gadm404_state_simp",
             "static": True,
         },
     }
@@ -67,6 +77,8 @@ class SCLClassification(SCLTask):
         )
 
         self._df_adhoc = self._df_ct = self._df_ss = None
+        self.fc_adhoc = self.fc_ct = self.fc_ss = None
+
         self.fc_csvs = []
         self.scl, _ = self.get_most_recent_featurecollection(
             self.inputs["scl"]["ee_path"]
@@ -74,10 +86,15 @@ class SCLClassification(SCLTask):
         self.scl_image, _ = self.get_most_recent_image(
             ee.ImageCollection(self.inputs["scl_image"]["ee_path"])
         )
+        self.structural_habitat, _ = self.get_most_recent_image(
+            ee.ImageCollection(self.inputs["structural_habitat"]["ee_path"])
+        )
         self.zones = ee.FeatureCollection(self.inputs["zones"]["ee_path"])
         self.gridcells = ee.FeatureCollection(self.inputs["gridcells"]["ee_path"])
         self.biomes = self.ecoregions.reduceToImage(["BIOME_NUM"], ee.Reducer.mode())
+        self.states = ee.FeatureCollection(self.inputs["states"]["ee_path"])
         self.intersects = ee.Filter.intersects(".geo", None, ".geo")
+        self.habitat_area_image = None
 
         self.scl_poly_filters = {
             "scl_species": ee.Filter.And(
@@ -140,6 +157,9 @@ class SCLClassification(SCLTask):
 
     def scl_image_path(self):
         return f"{self.ee_rootdir}/pothab/scl_image"
+
+    def structural_habitat_path(self):
+        return f"{self.ee_rootdir}/structural_habitat"
 
     def zones_path(self):
         return f"{self.speciesdir}/zones"
@@ -252,13 +272,13 @@ class SCLClassification(SCLTask):
         #     & (df[MASTER_CELL] != self.EE_NODATA)
         #     & (df[SCLPOLY_ID] != self.EE_NODATA)
         # ]
-
-        if savefc:
-            dfexport = self._prep_obs_df(df)
-            if not dfexport.empty:
-                obs_export = self.df2fc(dfexport)
+        obs_export = None
+        dfexport = self._prep_obs_df(df)
+        if not dfexport.empty:
+            obs_export = self.df2fc(dfexport)
+            if savefc:
                 self.export_fc_ee(obs_export, savefc)
-        return df
+        return df, obs_export
 
     def _get_blob(self, file_name):
         # TODO: increment name if it exists already like we do for ee export functions
@@ -336,7 +356,7 @@ class SCLClassification(SCLTask):
                 savefc = None
                 if self.save_intermediate:
                     savefc = "obs/adhoc"
-                self._df_adhoc = self.zonify(self._df_adhoc, savefc)
+                self._df_adhoc, self.fc_adhoc = self.zonify(self._df_adhoc, savefc)
                 self._df_adhoc = self._df_adhoc.drop([POINT_LOC, GRIDCELL_LOC], axis=1)
             # self._df_adhoc.set_index(MASTER_CELL, inplace=True)
 
@@ -410,7 +430,7 @@ class SCLClassification(SCLTask):
                 savefc = None
                 if self.save_intermediate:
                     savefc = "obs/ct"
-                self._df_ct = self.zonify(self._df_ct, savefc)
+                self._df_ct, self.fc_ct = self.zonify(self._df_ct, savefc)
 
                 self._df_ct = self._df_ct[
                     [
@@ -454,9 +474,10 @@ class SCLClassification(SCLTask):
 
                 print("zonify sign survey")
                 savefc = None
+
                 if self.save_intermediate:
                     savefc = "obs/ss"
-                self._df_ss = self.zonify(self._df_ss, savefc)
+                self._df_ss, self.fc_ss = self.zonify(self._df_ss, savefc)
                 self._df_ss = self._df_ss.drop([POINT_LOC, GRIDCELL_LOC], axis=1)
             # self._df_ss.set_index(MASTER_CELL, inplace=True)
 
@@ -509,22 +530,28 @@ class SCLClassification(SCLTask):
 
         return dissolved_cores, dissolved_fragments
 
-    def reattribute(self, polys):
+    def attribute_areas(self, polys):
         def _round(feat):
             geom = feat.geometry()
             eph = feat.get(HABITAT_AREA)
             ceph = feat.get(CONNECTED_HABITAT_AREA)
+            oeph = feat.get(OCCUPIED_HABITAT_AREA)
+            strh = feat.get(STRUCTURAL_HABITAT_AREA)
             return ee.Feature(
                 geom,
                 {
                     DISSOLVED_POLY_ID: feat.get(DISSOLVED_POLY_ID),
                     HABITAT_AREA: ee.Number(eph).round(),
                     CONNECTED_HABITAT_AREA: ee.Number(ceph).round(),
+                    OCCUPIED_HABITAT_AREA: ee.Number(oeph).round(),
+                    STRUCTURAL_HABITAT_AREA: ee.Number(strh).round(),
                 },
             )
 
         return (
-            self.scl_image.select([HABITAT_AREA, CONNECTED_HABITAT_AREA]).reduceRegions(
+            self.scl_image.select([HABITAT_AREA, CONNECTED_HABITAT_AREA])
+            .addBands(self.habitat_area_image)
+            .reduceRegions(
                 collection=polys,
                 reducer=ee.Reducer.sum(),
                 scale=self.scale,
@@ -540,6 +567,31 @@ class SCLClassification(SCLTask):
         return df_counts.index.is_unique
 
     def calc(self):
+        # printing these is necessary to create self.fc_ss, self.fc_ct, and self.fc_adhoc
+        # TODO: refactor so these prints are not necessary
+        print(self.df_adhoc)
+        print(self.df_signsurvey)
+        print(self.df_cameratrap)
+
+        ss_observed = self.fc_ss.filter(ee.Filter.gt(SS_SEGMENTS_DETECTED, 0))
+        ct_observed = self.fc_ct.filter(ee.Filter.gt(CT_DAYS_DETECTED, 0))
+        ah_observed = self.fc_adhoc
+        observed = ss_observed.merge(ct_observed).merge(ah_observed)
+        observed_grid = self.gridcells.filterBounds(observed)
+
+        occupied_habitat = (
+            self.scl_image.select([HABITAT_AREA])
+            .clipToCollection(observed_grid)
+            .rename(OCCUPIED_HABITAT_AREA)
+        )
+        self.export_image_ee(occupied_habitat, "pothab/occupied_habitat")
+
+        area = ee.Image.pixelArea().divide(1000000).updateMask(self.watermask)
+        str_hab_area = area.updateMask(self.structural_habitat).rename(
+            STRUCTURAL_HABITAT_AREA
+        )
+        self.habitat_area_image = occupied_habitat.addBands(str_hab_area)
+
         prob_columns = [SCLPOLY_ID, BIOME, COUNTRY, HABITAT_AREA, "pa_proportion"]
         df_scl_polys = self.fc2df(self.scl, columns=prob_columns)
         df_scl_polys.to_csv("scl_polys.csv")
@@ -575,12 +627,18 @@ class SCLClassification(SCLTask):
             scl_scored, "scl_restoration", "scl_fragment_extirpated"
         )
 
-        self.poly_export(self.reattribute(scl_species), "scl_species")
-        self.poly_export(self.reattribute(scl_species_fragment), "scl_species_fragment")
-        self.poly_export(self.reattribute(scl_survey), "scl_survey")
-        self.poly_export(self.reattribute(scl_survey_fragment), "scl_survey_fragment")
-        self.poly_export(self.reattribute(scl_restoration), "scl_restoration")
-        self.poly_export(self.reattribute(scl_rest_frag), "scl_restoration_fragment")
+        self.poly_export(self.attribute_areas(scl_species), "scl_species")
+        self.poly_export(
+            self.attribute_areas(scl_species_fragment), "scl_species_fragment",
+        )
+        self.poly_export(self.attribute_areas(scl_survey), "scl_survey")
+        self.poly_export(
+            self.attribute_areas(scl_survey_fragment), "scl_survey_fragment",
+        )
+        self.poly_export(self.attribute_areas(scl_restoration), "scl_restoration")
+        self.poly_export(
+            self.attribute_areas(scl_rest_frag), "scl_restoration_fragment",
+        )
 
         self.df2storage(metadata["diagnostics"], f"pyjags_diagnostics_{self.taskdate}")
         self.df2storage(

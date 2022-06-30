@@ -22,16 +22,12 @@ MASTER_CELL = "mastergridcell"
 SCLPOLY_ID = "poly_id"
 DISSOLVED_POLY_ID = "dissolved_poly_id"
 PROTECTED = "protected"
-ZONIFY_DF_COLUMNS = [
-    UNIQUE_ID,
-    MASTER_GRID,
-    MASTER_CELL,
-    SCLPOLY_ID,
-    PROTECTED
-]
+ZONIFY_DF_COLUMNS = [UNIQUE_ID, MASTER_GRID, MASTER_CELL, SCLPOLY_ID, PROTECTED]
 
 # labels used in classification
 HABITAT_AREA = "eff_pot_hab_area"
+OCCUPIED_HABITAT_AREA = "occupied_eff_pot_hab_area"
+STRUCTURAL_HABITAT_AREA = "structural_hab_area"
 PROPORTION_PROTECTED = "pa_proportion"
 CONNECTED_HABITAT_AREA = "connected_eff_pot_hab_area"
 MIN_PATCHSIZE = "min_patch_size"
