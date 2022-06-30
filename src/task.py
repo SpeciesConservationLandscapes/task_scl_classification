@@ -595,7 +595,7 @@ class SCLClassification(SCLTask):
         prob_columns = [SCLPOLY_ID, BIOME, COUNTRY, HABITAT_AREA, "pa_proportion"]
         df_scl_polys = self.fc2df(self.scl, columns=prob_columns)
         df_scl_polys.to_csv("scl_polys.csv")
-        df_scl_polys = pd.read_csv("scl_polys.csv")
+        # df_scl_polys = pd.read_csv("scl_polys.csv")
 
         # print(self.is_gridcell_unique(self.df_adhoc))
         # print(self.is_gridcell_unique(self.df_cameratrap))
