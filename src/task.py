@@ -77,7 +77,7 @@ class SCLClassification(SCLTask):
         )
 
         self._df_adhoc = self._df_ct = self._df_ss = None
-        self.fc_adhoc = self.fc_ct = self.fc_ss = None
+        self.fc_adhoc = self.fc_ct = self.fc_ss = ee.FeatureCollection([])
 
         self.fc_csvs = []
         self.scl, _ = self.get_most_recent_featurecollection(
@@ -537,6 +537,7 @@ class SCLClassification(SCLTask):
             ceph = feat.get(CONNECTED_HABITAT_AREA)
             oeph = feat.get(OCCUPIED_HABITAT_AREA)
             strh = feat.get(STRUCTURAL_HABITAT_AREA)
+            tpa = feat.get(AREA)
             return ee.Feature(
                 geom,
                 {
@@ -545,6 +546,7 @@ class SCLClassification(SCLTask):
                     CONNECTED_HABITAT_AREA: ee.Number(ceph).round(),
                     OCCUPIED_HABITAT_AREA: ee.Number(oeph).round(),
                     STRUCTURAL_HABITAT_AREA: ee.Number(strh).round(),
+                    POLYGON_AREA: ee.Number(tpa).round(),
                 },
             )
 
@@ -572,11 +574,23 @@ class SCLClassification(SCLTask):
         print(self.df_adhoc)
         print(self.df_signsurvey)
         print(self.df_cameratrap)
+        if self.fc_adhoc:
+            adhoc_observed = self.fc_adhoc
+        else:
+            adhoc_observed = ee.FeatureCollection([])
 
-        ss_observed = self.fc_ss.filter(ee.Filter.gt(SS_SEGMENTS_DETECTED, 0))
-        ct_observed = self.fc_ct.filter(ee.Filter.gt(CT_DAYS_DETECTED, 0))
-        ah_observed = self.fc_adhoc
-        observed = ss_observed.merge(ct_observed).merge(ah_observed)
+        if self.fc_ct:
+            ct_observed = self.fc_ct.filter(ee.Filter.gt(CT_DAYS_DETECTED, 0))
+        else:
+            ct_observed = ee.FeatureCollection([])
+
+        if self.fc_ss:
+            ss_observed = self.fc_ss.filter(ee.Filter.gt(SS_SEGMENTS_DETECTED, 0))
+        else:
+            ss_observed = ee.FeatureCollection([])
+
+        observed = adhoc_observed.merge(ct_observed).merge(ss_observed)
+
         observed_grid = self.gridcells.filterBounds(observed)
 
         occupied_habitat = (
@@ -586,11 +600,13 @@ class SCLClassification(SCLTask):
         )
         self.export_image_ee(occupied_habitat, "pothab/occupied_habitat")
 
-        area = ee.Image.pixelArea().divide(1000000).updateMask(self.watermask)
+        area = (
+            ee.Image.pixelArea().divide(1000000).updateMask(self.watermask).rename(AREA)
+        )
         str_hab_area = area.updateMask(self.structural_habitat).rename(
             STRUCTURAL_HABITAT_AREA
         )
-        self.habitat_area_image = occupied_habitat.addBands(str_hab_area)
+        self.habitat_area_image = occupied_habitat.addBands([str_hab_area, area])
 
         prob_columns = [SCLPOLY_ID, BIOME, COUNTRY, HABITAT_AREA, "pa_proportion"]
         df_scl_polys = self.fc2df(self.scl, columns=prob_columns)
